@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+
+# 日志文件
+logs/
+*.log
+output.log
+run.log
+
+# 视频文件
+videos/
+*.mp4
+*.avi
+
+# 临时文件
+/tmp/
+*.tmp
+
+# 备份文件
+*.bak
+*.backup
+
+# 环境变量
+.env
+.venv
+env/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+
+# Ignore large model files
+weight/*.om
+weight/*.pt
+

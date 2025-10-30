@@ -1,0 +1,39 @@
+{
+  "task_id": "统计测试",
+  "task_type": "人数统计",
+  "config_version": "2.0",
+  "created_at": "2025-10-22T08:38:02.597Z",
+  "updated_at": "2025-10-22T08:38:02.597Z",
+  "canvas_size": {
+    "width": 800,
+    "height": 450
+  },
+  "coordinate_type": "normalized",
+  "regions": [
+    {
+      "id": "region_1761122277053",
+      "name": "矩形_1",
+      "type": "rectangle",
+      "enabled": true,
+      "points": [
+        [
+          0.6375,
+          0.1667
+        ],
+        [
+          0.9525,
+          0.9444
+        ]
+      ],
+      "properties": {
+        "color": "#00FF00",
+        "opacity": 0.3,
+        "threshold": 0.5
+      }
+    }
+  ],
+  "algorithm_params": {
+    "confidence_threshold": 0.05,
+    "iou_threshold": 0.5
+  }
+}
