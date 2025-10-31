@@ -326,6 +326,10 @@ HTML_TEMPLATE = '''
                     <label>端口（可选，0=自动分配 7901-7999）</label>
                     <input type="number" id="realtime-port-input" value="0" placeholder="0=自动分配(7901-7999)">
                 </div>
+                <div class="form-group">
+                    <label>推理端点IP（可选，默认为172.17.0.2）</label>
+                    <input type="text" id="realtime-infer-ip-input" value="172.17.0.2" placeholder="例如: 172.17.0.2 或 10.1.6.230">
+                </div>
                 
                 <button class="btn btn-success" onclick="startService('realtime')">▶️ 批量新增实例</button>
                 <button class="btn btn-danger" onclick="stopService('realtime')">⏹️ 停止全部实例</button>
@@ -452,14 +456,19 @@ HTML_TEMPLATE = '''
             }
             const rows = instances.map(ins => {
                 const count = (ins.stats && ins.stats.total_requests != null) ? ins.stats.total_requests : '-';
+                const inferIp = ins.config.infer_ip || '172.17.0.2';
+                const inferUrl = `http://${inferIp}:${ins.config.port}/infer`;
                 return `
-                <div class="gpu-card" style="padding:10px;">
-                    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
+                <div class="gpu-card" style="padding:10px;margin-bottom:8px;">
+                    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
                         <span class="info-label">PID</span><span class="info-value">${ins.pid || '-'}</span>
                         <span class="info-label">端口</span><span class="info-value">${ins.config.port}</span>
-                        <span class="info-label">GPU</span><span class="info-value">${ins.config.gpu_id}</span>
+                        <span class="info-label">GPU</span><span class="info-value">${ins.config.device_id || '-'}</span>
                         <span class="info-label">累计推理</span><span class="info-value">${count}</span>
                         <button class="btn btn-danger" style="margin-left:auto;" onclick="stopInstance('${serviceKey}', ${ins.pid})">⏹️ 停止</button>
+                    </div>
+                    <div style="font-size:12px;color:#4a5568;padding-top:8px;border-top:1px solid #e2e8f0;">
+                        <strong>推理端点:</strong> <code style="background:#f7fafc;padding:2px 6px;border-radius:4px;">${inferUrl}</code>
                     </div>
                 </div>`;
             }).join('');
@@ -514,6 +523,7 @@ HTML_TEMPLATE = '''
             const devices = document.getElementById(`${serviceKey}-devices-input`).value;
             const port = document.getElementById(`${serviceKey}-port-input`).value;
             const batchSize = document.getElementById(`${serviceKey}-batch-input`).value;
+            const inferIp = document.getElementById(`${serviceKey}-infer-ip-input`).value || '172.17.0.2';
             
             try {
                 const response = await fetch('/api/start-service', {
@@ -524,7 +534,8 @@ HTML_TEMPLATE = '''
                         count: count,
                         device_ids: devices,
                         port: parseInt(port),
-                        batch_size: parseInt(batchSize)
+                        batch_size: parseInt(batchSize),
+                        infer_ip: inferIp
                     })
                 });
                 
@@ -1022,6 +1033,7 @@ def api_start_service():
     devices_raw = data.get('device_ids', '0')
     port = data.get('port', 0)
     batch_size = data.get('batch_size', 8)
+    infer_ip = data.get('infer_ip', '172.17.0.2')  # 推理端点IP，默认为172.17.0.2
     
     if service_key not in SERVICES:
         return jsonify({'success': False, 'message': '未知服务'})
@@ -1103,13 +1115,15 @@ def api_start_service():
                 service['script'],
                 '--port', str(inst_port),
                 '--device-id', str(device_id),
-                '--easydarwin', 'http://10.1.6.230:5066'
+                '--easydarwin', 'http://10.1.6.230:5066',
+                '--host-ip', infer_ip  # 传递推理端点IP给服务，用于注册到EasyDarwin
             ]
 
             # 记录日志标记
             log_handle.write(f"\n{'='*60}\n")
             log_handle.write(f"服务启动: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             log_handle.write(f"DEVICE: {device_id}, 端口: {inst_port}, 批处理: {batch_size}\n")
+            log_handle.write(f"推理端点IP: {infer_ip} (用于注册到EasyDarwin)\n")
             log_handle.write(f"{'='*60}\n")
             log_handle.flush()
 
@@ -1129,12 +1143,13 @@ def api_start_service():
                     'config': {
                         'device_id': device_id,
                         'port': inst_port,
-                        'batch_size': batch_size
+                        'batch_size': batch_size,
+                        'infer_ip': infer_ip  # 保存推理端点IP
                     },
                     'stats': None
                 }
                 service.setdefault('instances', []).append(instance)
-                started.append({'pid': process.pid, 'port': inst_port, 'device_id': device_id})
+                started.append({'pid': process.pid, 'port': inst_port, 'device_id': device_id, 'infer_ip': infer_ip})
 
         if not started:
             return jsonify({'success': False, 'message': '实例启动失败'}), 500

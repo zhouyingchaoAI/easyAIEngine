@@ -33,13 +33,13 @@ except ImportError:
 
 # 全局配置
 CONFIG = {
-    'service_id': 'yolo11x_head_detector',
-    'name': 'YOLOv11x人头检测算法',
+    'service_id': 'head_detector',
+    'name': '客流人数统计算法',
     'version': '2.1.0',
     'model_path': './weight/best.om',
     'task_types': ['人数统计', '客流分析', '人头检测'],
     'port': 7902,
-    'host': '0.0.0.0',
+    'host': '172.16.5.207',
     'easydarwin_url': '10.1.6.230:5066',
     'heartbeat_interval': 30,
 }
@@ -51,6 +51,8 @@ OM_LOADED = False
 CLASS_NAMES = ['head']
 RUNNING = True
 HEARTBEAT_THREAD = None
+REGISTER_THREAD = None
+REGISTERED = False  # 注册状态标志
 
 # 统计信息
 STATS = {
@@ -457,8 +459,10 @@ def load_model():
     print(f"✓ OM 模型加载成功 (耗时: {load_time:.2f}秒)")
 
 
-def register_service():
+def register_service(quiet=False):
     """注册到EasyDarwin"""
+    global REGISTERED
+    
     url = f"{CONFIG['easydarwin_url']}/api/v1/ai_analysis/register"
     
     # 优先使用手动指定的主机IP，然后是自动检测
@@ -506,11 +510,12 @@ def register_service():
         'version': CONFIG['version']
     }
     
-    print(f"\n正在注册到 {CONFIG['easydarwin_url']}...")
-    print(f"  服务ID: {CONFIG['service_id']}")
-    print(f"  服务名称: {CONFIG['name']}")
-    print(f"  任务类型: {CONFIG['task_types']}")
-    print(f"  推理端点: {endpoint}")
+    if not quiet:
+        print(f"\n正在注册到 {CONFIG['easydarwin_url']}...")
+        print(f"  服务ID: {CONFIG['service_id']}")
+        print(f"  服务名称: {CONFIG['name']}")
+        print(f"  任务类型: {CONFIG['task_types']}")
+        print(f"  推理端点: {endpoint}")
     
     try:
         response = requests.post(url, json=payload, timeout=10)
@@ -518,16 +523,21 @@ def register_service():
         
         result = response.json()
         if result.get('ok'):
-            print(f"✓ 注册成功")
+            if not quiet:
+                print(f"✓ 注册成功")
+            REGISTERED = True
             return True
         else:
-            print(f"✗ 注册失败: {result}")
+            if not quiet:
+                print(f"✗ 注册失败: {result}")
             return False
     except requests.exceptions.ConnectionError:
-        print(f"✗ 注册失败: 无法连接到 {CONFIG['easydarwin_url']}")
+        if not quiet:
+            print(f"✗ 注册失败: 无法连接到 {CONFIG['easydarwin_url']}（平台可能未启动）")
         return False
     except Exception as e:
-        print(f"✗ 注册失败: {str(e)}")
+        if not quiet:
+            print(f"✗ 注册失败: {str(e)}")
         return False
 
 
@@ -547,11 +557,14 @@ def unregister_service():
 
 def heartbeat_loop():
     """心跳循环"""
-    global RUNNING
+    global RUNNING, REGISTERED
     
     url = f"{CONFIG['easydarwin_url']}/api/v1/ai_analysis/heartbeat/{CONFIG['service_id']}"
     
     print(f"心跳线程已启动（每{CONFIG['heartbeat_interval']}秒）")
+    
+    consecutive_failures = 0
+    max_failures = 3  # 连续失败3次后重新尝试注册
     
     while RUNNING:
         time.sleep(CONFIG['heartbeat_interval'])
@@ -562,9 +575,57 @@ def heartbeat_loop():
         try:
             response = requests.post(url, timeout=5)
             if response.status_code == 200:
-                print(f"[{time.strftime('%H:%M:%S')}] 心跳发送成功")
+                if consecutive_failures > 0:
+                    print(f"[{time.strftime('%H:%M:%S')}] 心跳发送成功（已恢复）")
+                    consecutive_failures = 0
+                else:
+                    # 正常时不打印日志，避免刷屏
+                    pass
+            else:
+                consecutive_failures += 1
+                print(f"[{time.strftime('%H:%M:%S')}] 心跳发送失败: HTTP {response.status_code}")
         except Exception as e:
+            consecutive_failures += 1
             print(f"[{time.strftime('%H:%M:%S')}] 心跳发送失败: {str(e)}")
+        
+        # 如果连续失败多次，可能平台重启了，需要重新注册
+        if consecutive_failures >= max_failures:
+            print(f"[{time.strftime('%H:%M:%S')}] 连续失败{max_failures}次，尝试重新注册...")
+            REGISTERED = False
+            if register_service(quiet=True):
+                consecutive_failures = 0
+                print(f"[{time.strftime('%H:%M:%S')}] ✓ 重新注册成功，心跳继续")
+            else:
+                print(f"[{time.strftime('%H:%M:%S')}] ✗ 重新注册失败，继续重试...")
+
+
+def register_retry_loop():
+    """注册重试循环（后台持续尝试注册，直到成功）"""
+    global RUNNING, REGISTERED, HEARTBEAT_THREAD
+    
+    retry_interval = 30  # 每30秒重试一次
+    print(f"注册重试线程已启动（每{retry_interval}秒尝试注册，直到平台启动）")
+    
+    while RUNNING and not REGISTERED:
+        time.sleep(retry_interval)
+        
+        if not RUNNING:
+            break
+        
+        if REGISTERED:
+            break
+        
+        # 尝试注册（quiet模式，减少日志输出）
+        timestamp = time.strftime('%H:%M:%S')
+        print(f"[{timestamp}] 正在尝试注册到 {CONFIG['easydarwin_url']}...")
+        if register_service(quiet=True):
+            print(f"[{timestamp}] ✓ 注册成功！开始心跳...")
+            # 注册成功后，启动心跳线程
+            HEARTBEAT_THREAD = threading.Thread(target=heartbeat_loop, daemon=True)
+            HEARTBEAT_THREAD.start()
+            break
+        else:
+            print(f"[{timestamp}] ✗ 注册失败（平台可能未启动），{retry_interval}秒后重试...")
 
 
 def signal_handler(sig, frame):
@@ -634,14 +695,18 @@ def main():
     
     print("✓ 单线程推理模式已启用")
     
-    # 注册到EasyDarwin
-    registered = False
+    # 注册到EasyDarwin（优化：支持平台后启动）
     if not args.no_register:
-        registered = register_service()
-        
-        if registered:
+        # 启动时先尝试注册一次
+        if register_service():
+            # 如果立即成功，启动心跳线程
             HEARTBEAT_THREAD = threading.Thread(target=heartbeat_loop, daemon=True)
             HEARTBEAT_THREAD.start()
+        else:
+            # 如果失败（平台未启动），启动注册重试线程
+            print("\n⚠ 平台可能未启动，将在后台持续尝试注册...")
+            REGISTER_THREAD = threading.Thread(target=register_retry_loop, daemon=True)
+            REGISTER_THREAD.start()
     else:
         print("\n⚠ 跳过注册到EasyDarwin")
     
@@ -665,7 +730,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        if registered:
+        if REGISTERED:
             unregister_service()
         # 释放 ACL 资源
         try:
