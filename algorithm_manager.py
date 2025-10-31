@@ -311,6 +311,10 @@ HTML_TEMPLATE = '''
                 </div>
 
                 <div class="form-group">
+                    <label>服务ID前缀（批量实例自动递增）</label>
+                    <input type="text" id="realtime-service-prefix-input" value="yolo11x_head_detector" placeholder="例如: yolo11x_head_detector">
+                </div>
+                <div class="form-group">
                     <label>实例数量</label>
                     <input type="number" id="realtime-count-input" value="1" min="1" placeholder="要启动的实例个数">
                 </div>
@@ -464,6 +468,7 @@ HTML_TEMPLATE = '''
                         <span class="info-label">PID</span><span class="info-value">${ins.pid || '-'}</span>
                         <span class="info-label">端口</span><span class="info-value">${ins.config.port}</span>
                         <span class="info-label">GPU</span><span class="info-value">${ins.config.device_id || '-'}</span>
+                        <span class="info-label">服务ID</span><span class="info-value">${ins.config.service_id || '-'}</span>
                         <span class="info-label">累计推理</span><span class="info-value">${count}</span>
                         <button class="btn btn-danger" style="margin-left:auto;" onclick="stopInstance('${serviceKey}', ${ins.pid})">⏹️ 停止</button>
                     </div>
@@ -524,6 +529,7 @@ HTML_TEMPLATE = '''
             const port = document.getElementById(`${serviceKey}-port-input`).value;
             const batchSize = document.getElementById(`${serviceKey}-batch-input`).value;
             const inferIp = document.getElementById(`${serviceKey}-infer-ip-input`).value || '172.17.0.2';
+            const servicePrefix = document.getElementById(`${serviceKey}-service-prefix-input`).value || 'yolo11x_head_detector';
             
             try {
                 const response = await fetch('/api/start-service', {
@@ -535,7 +541,8 @@ HTML_TEMPLATE = '''
                         device_ids: devices,
                         port: parseInt(port),
                         batch_size: parseInt(batchSize),
-                        infer_ip: inferIp
+                        infer_ip: inferIp,
+                        service_id_prefix: servicePrefix
                     })
                 });
                 
@@ -1034,6 +1041,7 @@ def api_start_service():
     port = data.get('port', 0)
     batch_size = data.get('batch_size', 8)
     infer_ip = data.get('infer_ip', '172.17.0.2')  # 推理端点IP，默认为172.17.0.2
+    service_id_prefix = data.get('service_id_prefix', 'yolo11x_head_detector')
     
     if service_key not in SERVICES:
         return jsonify({'success': False, 'message': '未知服务'})
@@ -1113,6 +1121,7 @@ def api_start_service():
             cmd = [
                 'python3',
                 service['script'],
+                '--service-id', f"{service_id_prefix}_{inst_port}",
                 '--port', str(inst_port),
                 '--device-id', str(device_id),
                 '--easydarwin', 'http://10.1.6.230:5066',
@@ -1123,6 +1132,7 @@ def api_start_service():
             log_handle.write(f"\n{'='*60}\n")
             log_handle.write(f"服务启动: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             log_handle.write(f"DEVICE: {device_id}, 端口: {inst_port}, 批处理: {batch_size}\n")
+            log_handle.write(f"服务ID: {service_id_prefix}_{inst_port}\n")
             log_handle.write(f"推理端点IP: {infer_ip} (用于注册到EasyDarwin)\n")
             log_handle.write(f"{'='*60}\n")
             log_handle.flush()
@@ -1149,7 +1159,7 @@ def api_start_service():
                     'stats': None
                 }
                 service.setdefault('instances', []).append(instance)
-                started.append({'pid': process.pid, 'port': inst_port, 'device_id': device_id, 'infer_ip': infer_ip})
+                started.append({'pid': process.pid, 'port': inst_port, 'device_id': device_id, 'infer_ip': infer_ip, 'service_id': f"{service_id_prefix}_{inst_port}"})
 
         if not started:
             return jsonify({'success': False, 'message': '实例启动失败'}), 500
