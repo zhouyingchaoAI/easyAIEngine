@@ -49,7 +49,7 @@ HTML_TEMPLATE = '''
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
-            padding: 20px;
+            padding: 12px;
         }
         .container {
             max-width: 1400px;
@@ -57,92 +57,120 @@ HTML_TEMPLATE = '''
         }
         .header {
             background: white;
-            border-radius: 12px;
-            padding: 30px;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            border-radius: 10px;
+            padding: 16px 20px;
+            margin-bottom: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
         }
         .header h1 {
             color: #2d3748;
-            margin-bottom: 10px;
-            font-size: 32px;
+            margin-bottom: 4px;
+            font-size: 24px;
+            font-weight: 700;
         }
         .header p {
             color: #718096;
-            font-size: 16px;
+            font-size: 13px;
         }
         .grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
-            gap: 20px;
-            margin-bottom: 20px;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        .main-layout {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        @media (max-width: 1000px) {
+            .main-layout {
+                grid-template-columns: 1fr;
+            }
         }
         .card {
             background: white;
-            border-radius: 12px;
-            padding: 25px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            border-radius: 10px;
+            padding: 16px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
         }
         .card-title {
-            font-size: 20px;
+            font-size: 16px;
             font-weight: 600;
             color: #2d3748;
-            margin-bottom: 20px;
-            padding-bottom: 15px;
-            border-bottom: 2px solid #e2e8f0;
+            margin-bottom: 12px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
         }
         .status-badge {
             display: inline-block;
-            padding: 6px 16px;
-            border-radius: 20px;
-            font-size: 14px;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 11px;
             font-weight: 600;
-            margin-left: 10px;
+            margin-left: 8px;
         }
         .status-running { background: #48bb78; color: white; }
         .status-stopped { background: #cbd5e0; color: #4a5568; }
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px 12px;
+            margin-bottom: 12px;
+        }
         .form-group {
-            margin-bottom: 20px;
+            margin-bottom: 0;
+        }
+        .form-group.full-width {
+            grid-column: 1 / -1;
         }
         .form-group label {
             display: block;
             color: #4a5568;
-            font-weight: 600;
-            margin-bottom: 8px;
-            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 5px;
+            font-size: 12px;
         }
         .form-group input, .form-group select {
             width: 100%;
-            padding: 12px;
-            border: 2px solid #e2e8f0;
-            border-radius: 8px;
-            font-size: 14px;
-            transition: border-color 0.3s;
+            padding: 8px 10px;
+            border: 1.5px solid #e2e8f0;
+            border-radius: 6px;
+            font-size: 13px;
+            transition: border-color 0.2s;
         }
         .form-group input:focus, .form-group select:focus {
             outline: none;
             border-color: #667eea;
         }
+        .btn-group {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
         .btn {
-            padding: 12px 24px;
+            padding: 8px 16px;
             border: none;
-            border-radius: 8px;
-            font-size: 14px;
+            border-radius: 6px;
+            font-size: 13px;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.3s;
-            margin-right: 10px;
+            transition: all 0.2s;
         }
         .btn-primary {
             background: #667eea;
             color: white;
         }
-        .btn-primary:hover { background: #5568d3; transform: translateY(-2px); }
+        .btn-primary:hover { background: #5568d3; }
         .btn-danger {
             background: #f56565;
             color: white;
         }
-        .btn-danger:hover { background: #e53e3e; transform: translateY(-2px); }
+        .btn-danger:hover { background: #e53e3e; }
         .btn-success {
             background: #48bb78;
             color: white;
@@ -154,36 +182,37 @@ HTML_TEMPLATE = '''
         }
         .gpu-card {
             background: #f7fafc;
-            border: 2px solid #e2e8f0;
-            border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 15px;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 8px;
+            margin-bottom: 6px;
         }
         .gpu-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 10px;
+            margin-bottom: 6px;
         }
         .gpu-name {
             font-weight: 600;
             color: #2d3748;
-            font-size: 16px;
+            font-size: 12px;
         }
         .gpu-id {
             background: #667eea;
             color: white;
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-size: 12px;
+            padding: 2px 8px;
+            border-radius: 8px;
+            font-size: 10px;
+            font-weight: 600;
         }
         .progress-bar {
             width: 100%;
-            height: 24px;
+            height: 16px;
             background: #e2e8f0;
-            border-radius: 12px;
+            border-radius: 8px;
             overflow: hidden;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
         }
         .progress-fill {
             height: 100%;
@@ -192,7 +221,7 @@ HTML_TEMPLATE = '''
             align-items: center;
             justify-content: center;
             color: white;
-            font-size: 12px;
+            font-size: 10px;
             font-weight: 600;
             transition: width 0.3s;
         }
@@ -201,26 +230,90 @@ HTML_TEMPLATE = '''
         .gpu-info {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            font-size: 13px;
+            gap: 4px 6px;
+            font-size: 10px;
             color: #4a5568;
         }
         .info-item {
             display: flex;
             justify-content: space-between;
         }
-        .info-label { font-weight: 500; }
-        .info-value { font-weight: 600; color: #2d3748; }
+        .info-label { font-weight: 500; font-size: 11px; }
+        .info-value { font-weight: 600; color: #2d3748; font-size: 12px; }
+        .instances-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 10px;
+            margin-top: 8px;
+        }
+        .instance-card {
+            background: #f7fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 10px;
+            transition: all 0.2s;
+        }
+        .instance-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 2px 4px rgba(102, 126, 234, 0.1);
+        }
+        .instance-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 8px;
+        }
+        .instance-title {
+            font-weight: 600;
+            color: #2d3748;
+            font-size: 13px;
+            margin-bottom: 2px;
+        }
+        .instance-meta {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            font-size: 10px;
+            color: #718096;
+            margin-bottom: 6px;
+        }
+        .instance-meta span {
+            background: #edf2f7;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+        .instance-stats {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-top: 6px;
+            border-top: 1px solid #e2e8f0;
+        }
+        .instance-count {
+            font-size: 14px;
+            font-weight: 700;
+            color: #48bb78;
+        }
+        .instance-endpoint {
+            font-size: 9px;
+            color: #4a5568;
+            font-family: 'Courier New', monospace;
+            background: #edf2f7;
+            padding: 2px 4px;
+            border-radius: 3px;
+            word-break: break-all;
+            margin-top: 4px;
+        }
         .log-container {
             background: #1a202c;
             color: #e2e8f0;
-            padding: 15px;
-            border-radius: 8px;
+            padding: 12px;
+            border-radius: 6px;
             font-family: 'Courier New', monospace;
-            font-size: 12px;
-            max-height: 400px;
+            font-size: 11px;
+            max-height: 350px;
             overflow-y: auto;
-            line-height: 1.8;
+            line-height: 1.6;
         }
         .log-container div {
             padding: 2px 0;
@@ -243,26 +336,27 @@ HTML_TEMPLATE = '''
         }
         .service-info {
             background: #f7fafc;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
+            padding: 10px 12px;
+            border-radius: 6px;
+            margin-bottom: 12px;
+            font-size: 12px;
         }
         .service-info-item {
             display: flex;
             justify-content: space-between;
-            padding: 8px 0;
+            padding: 6px 0;
             border-bottom: 1px solid #e2e8f0;
         }
         .service-info-item:last-child { border-bottom: none; }
         .refresh-btn {
             background: #4299e1;
             color: white;
-            padding: 8px 16px;
+            padding: 5px 12px;
             border: none;
-            border-radius: 6px;
+            border-radius: 5px;
             cursor: pointer;
-            font-size: 12px;
-            margin-top: 10px;
+            font-size: 11px;
+            font-weight: 600;
         }
         .refresh-btn:hover { background: #3182ce; }
         @keyframes spin {
@@ -282,17 +376,18 @@ HTML_TEMPLATE = '''
             <p>管理和监控 YOLOv11x 人头检测算法服务</p>
         </div>
 
-        <!-- GPU监控 -->
-        <div class="card">
-            <div class="card-title">
-                💻 GPU 状态监控
-                <button class="refresh-btn" onclick="loadGPUInfo()">🔄 刷新</button>
+        <!-- GPU监控和服务管理左右分布 -->
+        <div class="main-layout">
+            <!-- GPU监控 -->
+            <div class="card">
+                <div class="card-title">
+                    <span>💻 GPU 监控</span>
+                    <button class="refresh-btn" onclick="loadGPUInfo()">🔄</button>
+                </div>
+                <div id="gpu-info" style="max-height:600px;overflow-y:auto;">加载中...</div>
             </div>
-            <div id="gpu-info">加载中...</div>
-        </div>
 
-        <!-- 服务管理（仅实时检测） -->
-        <div class="grid">
+            <!-- 服务管理（仅实时检测） -->
             <div class="card">
                 <div class="card-title">
                     🔴 实时检测服务
@@ -302,7 +397,8 @@ HTML_TEMPLATE = '''
                 <div class="service-info">
                     <div class="service-info-item">
                         <span>任务类型</span>
-                        <strong>人数统计、客流分析、人头检测</strong>
+                        <strong>人数统计</strong>
+                        
                     </div>
                     <div class="service-info-item">
                         <span>设备</span>
@@ -310,37 +406,41 @@ HTML_TEMPLATE = '''
                     </div>
                 </div>
 
-                <div class="form-group">
-                    <label>服务ID前缀（批量实例自动递增）</label>
-                    <input type="text" id="realtime-service-prefix-input" value="yolo11x_head_detector" placeholder="例如: yolo11x_head_detector">
-                </div>
-                <div class="form-group">
-                    <label>实例数量</label>
-                    <input type="number" id="realtime-count-input" value="1" min="1" placeholder="要启动的实例个数">
-                </div>
-                <div class="form-group">
-                    <label>设备列表（device_id）</label>
-                    <input type="text" id="realtime-devices-input" value="0" placeholder="例如: 0,1,0 表示按顺序分配">
-                </div>
-                <div class="form-group">
-                    <label>批处理大小</label>
-                    <input type="number" id="realtime-batch-input" value="8">
-                </div>
-                <div class="form-group">
-                    <label>端口（可选，0=自动分配 7901-7999）</label>
-                    <input type="number" id="realtime-port-input" value="0" placeholder="0=自动分配(7901-7999)">
-                </div>
-                <div class="form-group">
-                    <label>推理端点IP（可选，默认为172.17.0.2）</label>
-                    <input type="text" id="realtime-infer-ip-input" value="172.17.0.2" placeholder="例如: 172.17.0.2 或 10.1.6.230">
+                <div class="form-grid">
+                    <div class="form-group full-width">
+                        <label>服务ID前缀（批量实例自动递增）</label>
+                        <input type="text" id="realtime-service-prefix-input" value="yolo11x_head_detector" placeholder="例如: yolo11x_head_detector">
+                    </div>
+                    <div class="form-group">
+                        <label>实例数量</label>
+                        <input type="number" id="realtime-count-input" value="1" min="1" placeholder="要启动的实例个数">
+                    </div>
+                    <div class="form-group">
+                        <label>设备列表（device_id）</label>
+                        <input type="text" id="realtime-devices-input" value="0" placeholder="例如: 0,1,0">
+                    </div>
+                    <div class="form-group">
+                        <label>批处理大小</label>
+                        <input type="number" id="realtime-batch-input" value="8">
+                    </div>
+                    <div class="form-group">
+                        <label>端口（0=自动分配 7901-7999）</label>
+                        <input type="number" id="realtime-port-input" value="0" placeholder="0=自动分配">
+                    </div>
+                    <div class="form-group">
+                        <label>推理端点IP</label>
+                        <input type="text" id="realtime-infer-ip-input" value="172.17.0.2" placeholder="例如: 172.17.0.2">
+                    </div>
                 </div>
                 
-                <button class="btn btn-success" onclick="startService('realtime')">▶️ 批量新增实例</button>
-                <button class="btn btn-danger" onclick="stopService('realtime')">⏹️ 停止全部实例</button>
+                <div class="btn-group">
+                    <button class="btn btn-success" onclick="startService('realtime')">▶️ 批量新增实例</button>
+                    <button class="btn btn-danger" onclick="stopService('realtime')">⏹️ 停止全部实例</button>
+                </div>
 
-                <div style="margin-top:15px;">
-                    <div class="card-title" style="border:none;padding:0;margin:10px 0 5px 0;">实例列表</div>
-                    <div id="realtime-instances">暂无实例</div>
+                <div style="margin-top:12px;padding-top:12px;border-top:1px solid #e2e8f0;">
+                    <div class="card-title" style="border:none;padding:0;margin:0 0 8px 0;font-size:14px;">📋 实例列表</div>
+                    <div id="realtime-instances" class="instances-grid">暂无实例</div>
                 </div>
             </div>
         </div>
@@ -348,21 +448,23 @@ HTML_TEMPLATE = '''
         <!-- 系统日志 -->
         <div class="card">
             <div class="card-title">
-                📋 系统日志
-                <select id="log-service" onchange="loadLogs()" style="margin-left: 10px; padding: 6px 12px; border-radius: 6px; border: 2px solid #e2e8f0;">
-                    <option value="all">全部日志</option>
-                    <option value="manager">管理器日志</option>
-                    <option value="realtime">实时检测日志</option>
-                    <option value="line_crossing">绊线统计日志</option>
-                </select>
-                <select id="log-lines" onchange="loadLogs()" style="margin-left: 10px; padding: 6px 12px; border-radius: 6px; border: 2px solid #e2e8f0;">
-                    <option value="50">50行</option>
-                    <option value="100" selected>100行</option>
-                    <option value="200">200行</option>
-                    <option value="500">500行</option>
-                </select>
-                <button class="refresh-btn" onclick="loadLogs()">🔄 刷新</button>
-                <button class="refresh-btn" onclick="clearLogs()" style="background: #f56565;">🗑️ 清空</button>
+                <span>📋 系统日志</span>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <select id="log-service" onchange="loadLogs()" style="padding: 5px 10px; border-radius: 5px; border: 1.5px solid #e2e8f0; font-size: 11px;">
+                        <option value="all">全部日志</option>
+                        <option value="manager">管理器日志</option>
+                        <option value="realtime">实时检测日志</option>
+                        <option value="line_crossing">绊线统计日志</option>
+                    </select>
+                    <select id="log-lines" onchange="loadLogs()" style="padding: 5px 10px; border-radius: 5px; border: 1.5px solid #e2e8f0; font-size: 11px;">
+                        <option value="50">50行</option>
+                        <option value="100" selected>100行</option>
+                        <option value="200">200行</option>
+                        <option value="500">500行</option>
+                    </select>
+                    <button class="refresh-btn" onclick="loadLogs()">🔄 刷新</button>
+                    <button class="refresh-btn" onclick="clearLogs()" style="background: #f56565;">🗑️ 清空</button>
+                </div>
             </div>
             <div class="log-container" id="logs">
                 暂无日志...
@@ -407,21 +509,19 @@ HTML_TEMPLATE = '''
                         html += `
                             <div class="gpu-card">
                                 <div class="gpu-header">
-                                    <div class="gpu-name">🎮 ${gpu.name || 'GPU'}</div>
-                                    <div class="gpu-id">GPU ${gpu.id}</div>
+                                    <div class="gpu-name">${gpu.name || 'NPU'} #${gpu.id}</div>
+                                    <div class="gpu-id" style="background:${usage > 80 ? '#f56565' : usage > 60 ? '#ed8936' : '#48bb78'};">${usage.toFixed(0)}%</div>
                                 </div>
                                 <div class="progress-bar">
-                                    <div class="progress-fill ${progressClass}" style="width: ${usage}%">
-                                        ${usage.toFixed(1)}%
-                                    </div>
+                                    <div class="progress-fill ${progressClass}" style="width: ${usage}%"></div>
                                 </div>
                                 <div class="gpu-info">
                                     <div class="info-item">
-                                        <span class="info-label">显存使用</span>
-                                        <span class="info-value">${gpu.memory_used} / ${gpu.memory_total}</span>
+                                        <span class="info-label">显存</span>
+                                        <span class="info-value">${gpu.memory_used}/${gpu.memory_total}</span>
                                     </div>
                                     <div class="info-item">
-                                        <span class="info-label">AICore 利用率</span>
+                                        <span class="info-label">AICore</span>
                                         <span class="info-value">${gpu.utilization || 'N/A'}%</span>
                                     </div>
                                     <div class="info-item">
@@ -430,11 +530,7 @@ HTML_TEMPLATE = '''
                                     </div>
                                     <div class="info-item">
                                         <span class="info-label">功率</span>
-                                        <span class="info-value">${gpu.power || 'N/A'} W</span>
-                                    </div>
-                                    <div class="info-item">
-                                        <span class="info-label">健康</span>
-                                        <span class="info-value">${gpu.health || 'N/A'}</span>
+                                        <span class="info-value">${gpu.power || 'N/A'}W</span>
                                     </div>
                                 </div>
                             </div>
@@ -455,26 +551,44 @@ HTML_TEMPLATE = '''
             const container = document.getElementById(`${serviceKey}-instances`);
             if (!container) return;
             if (!instances || instances.length === 0) {
-                container.innerHTML = '<p style="color:#718096;">暂无实例</p>';
+                container.innerHTML = '<p style="color:#718096;text-align:center;padding:20px;">暂无实例</p>';
                 return;
             }
             const rows = instances.map(ins => {
                 const count = (ins.stats && ins.stats.total_requests != null) ? ins.stats.total_requests : '-';
+                const lastInferTime = (ins.stats && ins.stats.last_inference_time != null) ? ins.stats.last_inference_time.toFixed(2) : '-';
+                const lastTotalTime = (ins.stats && ins.stats.last_total_time != null) ? ins.stats.last_total_time.toFixed(2) : '-';
                 const inferIp = ins.config.infer_ip || '172.17.0.2';
                 const inferUrl = `http://${inferIp}:${ins.config.port}/infer`;
+                const serviceId = ins.config.service_id || `实例_${ins.pid}`;
                 return `
-                <div class="gpu-card" style="padding:10px;margin-bottom:8px;">
-                    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
-                        <span class="info-label">PID</span><span class="info-value">${ins.pid || '-'}</span>
-                        <span class="info-label">端口</span><span class="info-value">${ins.config.port}</span>
-                        <span class="info-label">GPU</span><span class="info-value">${ins.config.device_id || '-'}</span>
-                        <span class="info-label">服务ID</span><span class="info-value">${ins.config.service_id || '-'}</span>
-                        <span class="info-label">累计推理</span><span class="info-value">${count}</span>
-                        <button class="btn btn-danger" style="margin-left:auto;" onclick="stopInstance('${serviceKey}', ${ins.pid})">⏹️ 停止</button>
+                <div class="instance-card">
+                    <div class="instance-header">
+                        <div style="flex:1;">
+                            <div class="instance-title">${serviceId}</div>
+                            <div class="instance-meta">
+                                <span>PID: ${ins.pid || '-'}</span>
+                                <span>端口: ${ins.config.port}</span>
+                                <span>GPU: ${ins.config.device_id || '-'}</span>
+                            </div>
+                        </div>
+                        <button class="btn btn-danger" style="padding:4px 10px;font-size:10px;" onclick="stopInstance('${serviceKey}', ${ins.pid})">⏹️</button>
                     </div>
-                    <div style="font-size:12px;color:#4a5568;padding-top:8px;border-top:1px solid #e2e8f0;">
-                        <strong>推理端点:</strong> <code style="background:#f7fafc;padding:2px 6px;border-radius:4px;">${inferUrl}</code>
+                    <div class="instance-stats">
+                        <div>
+                            <div style="font-size:10px;color:#718096;margin-bottom:2px;">累计推理</div>
+                            <div class="instance-count">${count}</div>
+                        </div>
+                        <div style="text-align:right;">
+                            <div style="font-size:9px;color:#718096;margin-bottom:2px;">⚡ 推理时间</div>
+                            <div style="font-size:13px;font-weight:600;color:#667eea;">${lastInferTime} ms</div>
+                        </div>
                     </div>
+                    <div style="display:flex;justify-content:space-between;padding-top:6px;border-top:1px solid #e2e8f0;margin-top:6px;">
+                        <div style="font-size:9px;color:#718096;">🕒 总耗时</div>
+                        <div style="font-size:12px;font-weight:600;color:#4a5568;">${lastTotalTime} ms</div>
+                    </div>
+                    <div class="instance-endpoint">${inferUrl}</div>
                 </div>`;
             }).join('');
             container.innerHTML = rows;
@@ -1008,9 +1122,18 @@ def api_services():
                             data = json.loads(resp.read().decode('utf-8'))
                             if isinstance(data, dict):
                                 if 'statistics' in data and isinstance(data['statistics'], dict):
-                                    stats = {'total_requests': data['statistics'].get('total_requests')}
+                                    s = data['statistics']
+                                    stats = {
+                                        'total_requests': s.get('total_requests', 0),
+                                        'last_inference_time': s.get('last_inference_time', 0),
+                                        'last_total_time': s.get('last_total_time', 0)
+                                    }
                                 elif 'total_requests' in data:
-                                    stats = {'total_requests': data.get('total_requests')}
+                                    stats = {
+                                        'total_requests': data.get('total_requests', 0),
+                                        'last_inference_time': data.get('last_inference_time', 0),
+                                        'last_total_time': data.get('last_total_time', 0)
+                                    }
                 except Exception:
                     stats = None
                 ins['stats'] = stats
@@ -1124,7 +1247,7 @@ def api_start_service():
                 '--service-id', f"{service_id_prefix}_{inst_port}",
                 '--port', str(inst_port),
                 '--device-id', str(device_id),
-                '--easydarwin', 'http://10.1.6.230:5066',
+                '--easydarwin', 'http://172.16.5.207:5066',
                 '--host-ip', infer_ip  # 传递推理端点IP给服务，用于注册到EasyDarwin
             ]
 
@@ -1147,6 +1270,7 @@ def api_start_service():
 
             time.sleep(0.5)
             if process.poll() is None:
+                service_id = f"{service_id_prefix}_{inst_port}"
                 instance = {
                     'process': process,
                     'pid': process.pid,
@@ -1154,12 +1278,13 @@ def api_start_service():
                         'device_id': device_id,
                         'port': inst_port,
                         'batch_size': batch_size,
-                        'infer_ip': infer_ip  # 保存推理端点IP
+                        'infer_ip': infer_ip,  # 保存推理端点IP
+                        'service_id': service_id  # 保存服务ID
                     },
                     'stats': None
                 }
                 service.setdefault('instances', []).append(instance)
-                started.append({'pid': process.pid, 'port': inst_port, 'device_id': device_id, 'infer_ip': infer_ip, 'service_id': f"{service_id_prefix}_{inst_port}"})
+                started.append({'pid': process.pid, 'port': inst_port, 'device_id': device_id, 'infer_ip': infer_ip, 'service_id': service_id})
 
         if not started:
             return jsonify({'success': False, 'message': '实例启动失败'}), 500
