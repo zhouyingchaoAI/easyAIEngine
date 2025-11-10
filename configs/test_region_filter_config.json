@@ -1,0 +1,20 @@
+{
+  "task_id": "测试区域过滤",
+  "task_type": "人数统计",
+  "regions": [
+    {
+      "id": "area_1",
+      "name": "中心检测区域",
+      "type": "rectangle",
+      "enabled": true,
+      "points": [
+        [0.3, 0.3],
+        [0.7, 0.7]
+      ]
+    }
+  ],
+  "algorithm_params": {
+    "confidence_threshold": 0.5
+  }
+}
+

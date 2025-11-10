@@ -2,7 +2,9 @@
 
 # 日志管理脚本
 
-LOG_DIR="/cv_space/predict/logs"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+LOG_DIR="${PROJECT_ROOT}/logs"
 
 show_help() {
     cat << EOF

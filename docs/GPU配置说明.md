@@ -13,28 +13,28 @@
 #### 实时检测服务（默认GPU 3，端口8501）
 ```bash
 # 使用默认GPU 3
-./start_algorithm_service.sh
+./scripts/start_algorithm_service.sh
 
 # 指定使用GPU 0
-./start_algorithm_service.sh --gpu-id 0
+./scripts/start_algorithm_service.sh --gpu-id 0
 
 # 指定使用GPU 1
-./start_algorithm_service.sh --gpu-id 1
+./scripts/start_algorithm_service.sh --gpu-id 1
 
 # 使用多个GPU（0和1）
-./start_algorithm_service.sh --gpu-id "0,1"
+./scripts/start_algorithm_service.sh --gpu-id "0,1"
 ```
 
 #### 绊线统计服务（默认GPU 3，端口8502）
 ```bash
 # 使用默认GPU 3
-./start_line_crossing_service.sh
+./scripts/start_line_crossing_service.sh
 
 # 指定使用GPU 2
-./start_line_crossing_service.sh --gpu-id 2
+./scripts/start_line_crossing_service.sh --gpu-id 2
 
 # 使用多个GPU（2和3）
-./start_line_crossing_service.sh --gpu-id "2,3"
+./scripts/start_line_crossing_service.sh --gpu-id "2,3"
 ```
 
 ---
@@ -58,10 +58,10 @@ python3 algorithm_service_line_crossing.py --gpu-id 1 --port 8502
 ### 场景1：两个服务运行在同一个GPU上
 ```bash
 # 实时检测服务 - GPU 0
-./start_algorithm_service.sh --gpu-id 0 --port 8501
+./scripts/start_algorithm_service.sh --gpu-id 0 --port 8501
 
 # 绊线统计服务 - GPU 0（同一个GPU）
-./start_line_crossing_service.sh --gpu-id 0 --port 8502
+./scripts/start_line_crossing_service.sh --gpu-id 0 --port 8502
 ```
 
 **适用于：**
@@ -74,10 +74,10 @@ python3 algorithm_service_line_crossing.py --gpu-id 1 --port 8502
 ### 场景2：两个服务运行在不同GPU上（推荐）
 ```bash
 # 实时检测服务 - GPU 0
-./start_algorithm_service.sh --gpu-id 0 --port 8501
+./scripts/start_algorithm_service.sh --gpu-id 0 --port 8501
 
 # 绊线统计服务 - GPU 1
-./start_line_crossing_service.sh --gpu-id 1 --port 8502
+./scripts/start_line_crossing_service.sh --gpu-id 1 --port 8502
 ```
 
 **适用于：**
@@ -90,10 +90,10 @@ python3 algorithm_service_line_crossing.py --gpu-id 1 --port 8502
 ### 场景3：单个服务使用多个GPU
 ```bash
 # 实时检测服务 - 使用GPU 0和1
-./start_algorithm_service.sh --gpu-id "0,1" --port 8501
+./scripts/start_algorithm_service.sh --gpu-id "0,1" --port 8501
 
 # 绊线统计服务 - 使用GPU 2和3
-./start_line_crossing_service.sh --gpu-id "2,3" --port 8502
+./scripts/start_line_crossing_service.sh --gpu-id "2,3" --port 8502
 ```
 
 **适用于：**
@@ -106,8 +106,8 @@ python3 algorithm_service_line_crossing.py --gpu-id 1 --port 8502
 ### 场景4：默认配置（都使用GPU 3）
 ```bash
 # 两个服务都使用默认GPU 3
-./start_algorithm_service.sh       # GPU 3, 端口 8501
-./start_line_crossing_service.sh   # GPU 3, 端口 8502
+./scripts/start_algorithm_service.sh       # GPU 3, 端口 8501
+./scripts/start_line_crossing_service.sh   # GPU 3, 端口 8502
 ```
 
 **适用于：**
@@ -124,16 +124,16 @@ python3 algorithm_service_line_crossing.py --gpu-id 1 --port 8502
 nvidia-smi
 
 # 选择显存充足的GPU
-./start_algorithm_service.sh --gpu-id 1  # 假设GPU 1显存充足
+./scripts/start_algorithm_service.sh --gpu-id 1  # 假设GPU 1显存充足
 ```
 
 ### 根据负载选择
 ```bash
 # 实时检测服务负载较高 → 使用性能更好的GPU
-./start_algorithm_service.sh --gpu-id 0 --port 8501  # 最好的GPU
+./scripts/start_algorithm_service.sh --gpu-id 0 --port 8501  # 最好的GPU
 
 # 绊线统计服务负载较低 → 使用次要GPU
-./start_line_crossing_service.sh --gpu-id 1 --port 8502  # 次要GPU
+./scripts/start_line_crossing_service.sh --gpu-id 1 --port 8502  # 次要GPU
 ```
 
 ---
@@ -143,14 +143,14 @@ nvidia-smi
 ### 示例1：生产环境（两块GPU）
 ```bash
 # 实时检测服务 - GPU 0（主要业务）
-./start_algorithm_service.sh \
+./scripts/start_algorithm_service.sh \
   --gpu-id 0 \
   --port 8501 \
   --service-id realtime_detector \
   --easydarwin http://10.1.6.230:5066
 
 # 绊线统计服务 - GPU 1（辅助业务）
-./start_line_crossing_service.sh \
+./scripts/start_line_crossing_service.sh \
   --gpu-id 1 \
   --port 8502 \
   --service-id line_crossing_counter \
@@ -162,8 +162,8 @@ nvidia-smi
 ### 示例2：开发环境（单块GPU）
 ```bash
 # 两个服务都使用GPU 0
-./start_algorithm_service.sh --gpu-id 0 --port 8501 --no-register
-./start_line_crossing_service.sh --gpu-id 0 --port 8502 --no-register
+./scripts/start_algorithm_service.sh --gpu-id 0 --port 8501 --no-register
+./scripts/start_line_crossing_service.sh --gpu-id 0 --port 8502 --no-register
 ```
 
 ---
@@ -171,10 +171,10 @@ nvidia-smi
 ### 示例3：高性能环境（多GPU负载均衡）
 ```bash
 # 实时检测服务 - GPU 0,1（高并发）
-./start_algorithm_service.sh --gpu-id "0,1" --port 8501
+./scripts/start_algorithm_service.sh --gpu-id "0,1" --port 8501
 
 # 绊线统计服务 - GPU 2,3（高并发）
-./start_line_crossing_service.sh --gpu-id "2,3" --port 8502
+./scripts/start_line_crossing_service.sh --gpu-id "2,3" --port 8502
 ```
 
 ---
@@ -239,10 +239,10 @@ nvidia-smi | grep python
 **解决方案：**
 ```bash
 # 方案1：使用其他GPU
-./start_algorithm_service.sh --gpu-id 1
+./scripts/start_algorithm_service.sh --gpu-id 1
 
 # 方案2：减小批处理大小
-./start_algorithm_service.sh --gpu-id 0 --batch-size 4
+./scripts/start_algorithm_service.sh --gpu-id 0 --batch-size 4
 
 # 方案3：停止其他占用GPU的进程
 nvidia-smi
@@ -264,7 +264,7 @@ python3 -c "import torch; print(torch.cuda.device_count())"
 
 # 使用有效的GPU ID
 nvidia-smi  # 查看可用GPU列表
-./start_algorithm_service.sh --gpu-id 0  # 使用第一个GPU
+./scripts/start_algorithm_service.sh --gpu-id 0  # 使用第一个GPU
 ```
 
 ---
@@ -275,12 +275,12 @@ nvidia-smi  # 查看可用GPU列表
 **解决方案：**
 ```bash
 # 确保使用不同端口
-./start_algorithm_service.sh --gpu-id 0 --port 8501
-./start_line_crossing_service.sh --gpu-id 1 --port 8502  # 不同端口
+./scripts/start_algorithm_service.sh --gpu-id 0 --port 8501
+./scripts/start_line_crossing_service.sh --gpu-id 1 --port 8502  # 不同端口
 
 # 或使用不同GPU
-./start_algorithm_service.sh --gpu-id 0 --port 8501
-./start_line_crossing_service.sh --gpu-id 1 --port 8502  # 不同GPU
+./scripts/start_algorithm_service.sh --gpu-id 0 --port 8501
+./scripts/start_line_crossing_service.sh --gpu-id 1 --port 8502  # 不同GPU
 ```
 
 ---
@@ -307,11 +307,11 @@ nvidia-smi  # 查看可用GPU列表
 
 | 场景 | 命令 |
 |------|------|
-| 默认配置 | `./start_algorithm_service.sh` |
-| 指定GPU 0 | `./start_algorithm_service.sh --gpu-id 0` |
-| 指定GPU 1 | `./start_algorithm_service.sh --gpu-id 1` |
-| 多GPU (0,1) | `./start_algorithm_service.sh --gpu-id "0,1"` |
-| 绊线GPU 2 | `./start_line_crossing_service.sh --gpu-id 2` |
+| 默认配置 | `./scripts/start_algorithm_service.sh` |
+| 指定GPU 0 | `./scripts/start_algorithm_service.sh --gpu-id 0` |
+| 指定GPU 1 | `./scripts/start_algorithm_service.sh --gpu-id 1` |
+| 多GPU (0,1) | `./scripts/start_algorithm_service.sh --gpu-id "0,1"` |
+| 绊线GPU 2 | `./scripts/start_line_crossing_service.sh --gpu-id 2` |
 | 查看GPU | `nvidia-smi` |
 | 监控GPU | `watch -n 1 nvidia-smi` |
 

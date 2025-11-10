@@ -7,7 +7,9 @@ echo "  绊线告警逻辑验证"
 echo "=========================================="
 echo ""
 
-LOG_FILE="/cv_space/predict/logs/line_crossing.log"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+LOG_FILE="${PROJECT_ROOT}/logs/line_crossing.log"
 
 # 检查服务是否运行
 echo "1. 检查服务状态..."
@@ -15,7 +17,7 @@ if curl -s http://localhost:7903/health > /dev/null 2>&1; then
     echo "   ✓ 绊线统计服务正在运行（端口 7903）"
 else
     echo "   ✗ 绊线统计服务未运行"
-    echo "   请先启动: ./start_line_crossing_service.sh"
+    echo "   请先启动: ./scripts/start_line_crossing_service.sh"
     exit 1
 fi
 echo ""

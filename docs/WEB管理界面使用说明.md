@@ -19,7 +19,7 @@ Web管理界面提供了一个简单友好的界面来管理和监控算法服�
 
 ```bash
 cd /cv_space/predict
-pip install -r requirements_manager.txt
+pip install -r requirements.txt
 ```
 
 依赖包括：
@@ -31,7 +31,7 @@ pip install -r requirements_manager.txt
 ### 2. 启动管理界面
 
 ```bash
-./start_manager.sh
+./scripts/start_manager.sh
 ```
 
 或者：
@@ -327,7 +327,7 @@ ps aux | grep algorithm_manager
 netstat -tulpn | grep 8500
 
 # 重新启动管理器
-./start_manager.sh
+./scripts/start_manager.sh
 ```
 
 ### 问题2: GPU信息无法显示
@@ -361,7 +361,7 @@ nvidia-smi
 
 1. **启动管理界面**
    ```bash
-   ./start_manager.sh
+   ./scripts/start_manager.sh
    ```
 
 2. **访问Web界面**
@@ -477,13 +477,12 @@ sudo ufw allow from <trusted-ip> to any port 8500
 
 ```
 /cv_space/predict/
-├── algorithm_manager.py              # 管理器后端服务
-├── start_manager.sh                  # 管理器启动脚本
-├── requirements_manager.txt          # 管理器依赖
-├── algorithm_service.py              # 实时检测服务
+├── algorithm_manager.py               # 管理器后端服务
+├── algorithm_service.py               # 实时检测服务
 ├── algorithm_service_line_crossing.py # 绊线统计服务
-├── start_algorithm_service.sh        # 实时检测启动脚本
-└── start_line_crossing_service.sh    # 绊线统计启动脚本
+├── requirements.txt                   # 通用依赖
+├── scripts/                           # 启动与维护脚本
+└── logs/                              # 运行日志目录
 ```
 
 ---
@@ -514,7 +513,7 @@ sudo ufw allow from <trusted-ip> to any port 8500
 - [服务说明.md](服务说明.md) - 服务功能说明
 - [GPU配置说明.md](GPU配置说明.md) - GPU配置详细说明
 - [告警机制说明.md](告警机制说明.md) - 告警机制说明
-- 系统日志: `/cv_space/predict/output.log`
+- 系统日志: `/cv_space/predict/logs/`
 
 ---
 
@@ -522,10 +521,10 @@ sudo ufw allow from <trusted-ip> to any port 8500
 
 ```bash
 # 1. 安装依赖
-pip install -r requirements_manager.txt
+pip install -r requirements.txt
 
 # 2. 启动管理界面
-./start_manager.sh
+./scripts/start_manager.sh
 
 # 3. 打开浏览器
 # 访问: http://localhost:8500

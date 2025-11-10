@@ -1,49 +1,54 @@
 #!/bin/bash
 
-# YOLOv11x人头检测算法服务启动脚本
+# YOLOv11x绊线人数统计算法服务启动脚本
+
+# 项目根目录
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "$PROJECT_ROOT" || exit 1
 
 # 默认配置
-SERVICE_ID="yolo11x_head_detector"
-NAME="YOLOv11x人头检测算法"
-PORT=7902
+SERVICE_ID="yolo11x_line_crossing"
+NAME="YOLOv11x绊线人数统计算法"
+PORT=7903
 HOST="0.0.0.0"
-EASYDARWIN="http://10.1.6.230:5066"
-MODEL="/cv_space/predict/weight/best.pt"
+EASYDARWIN="http://172.16.5.207:5066"
+MODEL="${PROJECT_ROOT}/weight/best.pt"
 GPU_ID="3"
 NO_REGISTER=false
 
 # 显示帮助信息
 show_help() {
     cat << EOF
-YOLOv11x人头检测算法服务启动脚本
-用于实时检测任务（人数统计、客流分析、人头检测）
+YOLOv11x绊线人数统计算法服务启动脚本
+专门用于绊线检测和跨线人数统计
 
 用法:
     $0 [选项]
 
 选项:
     -h, --help              显示帮助信息
-    -i, --service-id ID     服务ID (默认: yolo11x_head_detector)
-    -n, --name NAME         服务名称 (默认: YOLOv11x人头检测算法)
-    -p, --port PORT         监听端口 (默认: 7902)
+    -i, --service-id ID     服务ID (默认: yolo11x_line_crossing)
+    -n, --name NAME         服务名称 (默认: YOLOv11x绊线人数统计算法)
+    -p, --port PORT         监听端口 (默认: 7903)
     -H, --host HOST         监听地址 (默认: 0.0.0.0)
-    -e, --easydarwin URL    EasyDarwin地址 (默认: http://10.1.6.230:5066)
+    -e, --easydarwin URL    EasyDarwin地址 (默认: http://172.16.5.207:5066)
     -m, --model PATH        模型路径
     -g, --gpu-id ID         GPU设备ID (默认: 3, 可设置多个如 "0,1")
     --no-register           不注册到EasyDarwin
 
 功能特性:
     - 人头检测: YOLOv11x 模型
-    - 人数统计: 统计检测到的人数（实时）
-    - 客流分析: 客流量分析（实时）
-    - 实时告警: 每次检测都返回当前结果
+    - 目标跟踪: 基于IOU的目标跟踪
+    - 绊线检测: 自动统计跨线人数
+    - 增量告警: 只在有新跨线时触发告警
 
 示例:
     # 使用默认配置启动
     $0
 
     # 指定端口启动
-    $0 --port 7902
+    $0 --port 7903
 
     # 指定GPU设备
     $0 --gpu-id 0
@@ -51,15 +56,15 @@ YOLOv11x人头检测算法服务启动脚本
     # 使用多个GPU
     $0 --gpu-id "0,1"
 
-    # 不注册到EasyDarwin（仅HTTP服务）
+    # 不注册到EasyDarwin
     $0 --no-register
 
     # 完整自定义配置
-    $0 --gpu-id 1 --port 9000 --service-id my_detector
+    $0 --gpu-id 2 --port 9001
 
-注意:
-    本服务用于实时检测任务
-    如需绊线人数统计功能，请使用 start_line_crossing_service.sh 启动绊线算法服务
+绊线配置:
+    需要在图片目录下提供 algo_config.json 配置文件
+    详细文档请参阅: 绊线增量告警说明.md
 
 EOF
 }
@@ -124,7 +129,7 @@ if [ ! -f "$MODEL" ]; then
 fi
 
 # 构建命令
-CMD="python3 algorithm_service.py"
+CMD="python3 algorithm_service_line_crossing.py"
 CMD="$CMD --service-id '$SERVICE_ID'"
 CMD="$CMD --name '$NAME'"
 CMD="$CMD --port $PORT"
@@ -132,18 +137,17 @@ CMD="$CMD --host $HOST"
 CMD="$CMD --easydarwin $EASYDARWIN"
 CMD="$CMD --model '$MODEL'"
 CMD="$CMD --gpu-id '$GPU_ID'"
-CMD="$CMD --task-types 人数统计 客流分析 人头检测"
 
 if [ "$NO_REGISTER" = true ]; then
     CMD="$CMD --no-register"
 fi
 
 # 创建日志目录
-LOG_DIR="/cv_space/predict/logs"
+LOG_DIR="${PROJECT_ROOT}/logs"
 mkdir -p "$LOG_DIR"
 
 # 日志文件路径
-LOG_FILE="$LOG_DIR/realtime_detector.log"
+LOG_FILE="$LOG_DIR/line_crossing.log"
 
 # 显示配置信息
 echo "启动配置:"

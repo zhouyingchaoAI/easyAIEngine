@@ -2,6 +2,10 @@
 
 # 算法服务管理器启动脚本
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "$PROJECT_ROOT" || exit 1
+
 echo "启动算法服务管理器..."
 echo ""
 echo "管理界面将在以下地址启动:"
