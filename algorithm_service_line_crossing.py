@@ -75,11 +75,179 @@ BATCH_STATS = {
     'total_inference_time': 0.0,
     'avg_batch_size': 0.0,
     'max_batch_size': 0,
+    'last_inference_time': 0.0,  # 最近一次推理时间（ms）
+    'last_total_time': 0.0,      # 最近一次总耗时（ms）
 }
 
 # 绊线告警相关（增量告警机制）
 LAST_CROSSING_COUNTS = {}
 LAST_CROSSING_COUNTS_LOCK = threading.Lock()
+
+
+def point_in_polygon(point, polygon):
+    """
+    判断点是否在多边形内（射线法）
+    point: (x, y)
+    polygon: [(x1, y1), (x2, y2), ...]
+    """
+    x, y = point
+    n = len(polygon)
+    inside = False
+    
+    p1x, p1y = polygon[0]
+    for i in range(1, n + 1):
+        p2x, p2y = polygon[i % n]
+        if y > min(p1y, p2y):
+            if y <= max(p1y, p2y):
+                if x <= max(p1x, p2x):
+                    if p1y != p2y:
+                        xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                    if p1x == p2x or x <= xinters:
+                        inside = not inside
+        p1x, p1y = p2x, p2y
+    
+    return inside
+
+
+def filter_objects_by_region(objects, regions_or_config, image_size):
+    """
+    根据区域过滤检测对象（支持矩形、多边形，支持归一化/画布坐标）
+    objects:    检测到的对象列表
+    regions_or_config: 区域配置列表或完整算法配置
+    image_size: (width, height)
+    返回:       过滤后的对象列表
+    """
+    if not regions_or_config:
+        return objects
+    
+    algo_config = regions_or_config if isinstance(regions_or_config, dict) else None
+    regions = algo_config.get('regions', []) if algo_config else regions_or_config
+    
+    if not regions:
+        return objects
+    
+    # 只考虑启用的非绊线区域
+    enabled_regions = [
+        r for r in regions
+        if r.get('enabled', True) and r.get('type') not in ['line']
+    ]
+    
+    if not enabled_regions:
+        # 没有启用的检测区域，返回所有对象
+        return objects
+    
+    width, height = image_size
+    filtered_objects = []
+    
+    default_coordinate_type = ''
+    canvas_size = {}
+    if algo_config:
+        default_coordinate_type = (algo_config.get('coordinate_type') or '').lower()
+        canvas_size = algo_config.get('canvas_size') or {}
+    
+    canvas_width = canvas_size.get('width') or width
+    canvas_height = canvas_size.get('height') or height
+
+    def convert_point(point, coordinate_type_override=None):
+        if point is None or len(point) < 2:
+            return None
+        
+        x, y = point[0], point[1]
+        coord_type = (coordinate_type_override or '').lower()
+        if not coord_type:
+            coord_type = default_coordinate_type
+        
+        if coord_type in ('normalized', 'relative'):
+            return x * width, y * height
+        
+        if coord_type in ('canvas', 'design', 'ui'):
+            if canvas_width and canvas_height:
+                scale_x = width / canvas_width
+                scale_y = height / canvas_height
+                return x * scale_x, y * scale_y
+            return x, y
+        
+        if coord_type in ('pixel', 'pixels', 'absolute'):
+            return x, y
+        
+        if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+            if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
+                return x * width, y * height
+        return x, y
+
+    for obj in objects:
+        bbox = obj['bbox']
+        # 计算物体中心点（原始坐标）
+        center_x_raw = (bbox[0] + bbox[2]) / 2
+        center_y_raw = (bbox[1] + bbox[3]) / 2
+        
+        # 判断bbox是否为归一化坐标，并转换为像素坐标
+        if all(0 <= coord <= 1 for coord in bbox):
+            # 归一化坐标，转换为像素坐标
+            center_x = center_x_raw * width
+            center_y = center_y_raw * height
+        else:
+            # 已经是像素坐标
+            center_x = center_x_raw
+            center_y = center_y_raw
+        
+        # 检查是否在任何一个区域内
+        in_any_region = False
+        for region in enabled_regions:
+            region_type = region.get('type')
+            points = region.get('points', [])
+            region_coord_type = (region.get('coordinate_type') or '').lower()
+            region_threshold = None
+            properties = region.get('properties') or {}
+            if isinstance(properties, dict):
+                region_threshold = properties.get('threshold')
+            if region_threshold is not None:
+                try:
+                    if float(obj.get('confidence', 0.0)) < float(region_threshold):
+                        continue
+                except Exception:
+                    continue
+            
+            if region_type == 'rectangle' and len(points) >= 2:
+                # 矩形区域：points[0] 是左上角，points[1] 是右下角
+                p1, p2 = points[0], points[1]
+                
+                converted_p1 = convert_point(p1, region_coord_type)
+                converted_p2 = convert_point(p2, region_coord_type)
+                if not converted_p1 or not converted_p2:
+                    continue
+                x1, y1 = converted_p1
+                x2, y2 = converted_p2
+                
+                # 确保 x1 < x2, y1 < y2
+                x1, x2 = min(x1, x2), max(x1, x2)
+                y1, y2 = min(y1, y2), max(y1, y2)
+                
+                # 判断中心点是否在矩形内
+                if x1 <= center_x <= x2 and y1 <= center_y <= y2:
+                    in_any_region = True
+                    break
+                    
+            elif region_type == 'polygon' and len(points) >= 3:
+                # 多边形区域
+                polygon = []
+                for point in points:
+                    converted = convert_point(point, region_coord_type)
+                    if converted is not None:
+                        polygon.append(tuple(converted))
+                
+                if len(polygon) < 3:
+                    continue
+                
+                # 判断中心点是否在多边形内
+                if point_in_polygon((center_x, center_y), polygon):
+                    in_any_region = True
+                    break
+        
+        if in_any_region:
+            filtered_objects.append(obj)
+    
+    return filtered_objects
 
 
 class InferenceRequest:
@@ -465,6 +633,8 @@ class BatchInferenceProcessor:
         image = request.image
         task_id = request_data.get('task_id', 'unknown')
         algo_config = request_data.get('algo_config')
+        if not algo_config:
+            algo_config = load_algo_config(request_data.get('image_url', ''))
         
         # 获取算法参数
         confidence_threshold = 0.5
@@ -496,6 +666,19 @@ class BatchInferenceProcessor:
                 objects.append(obj)
                 detections.append(obj)
         
+        # 【区域过滤】如果配置了检测区域，只保留区域内的物体
+        original_count = len(objects)
+        regions = []
+        if algo_config:
+            regions = algo_config.get('regions', [])
+            if regions:
+                image_size = (image.shape[1], image.shape[0])
+                objects = filter_objects_by_region(objects, algo_config, image_size)
+                detections = filter_objects_by_region(detections, algo_config, image_size)
+                filtered_count = original_count - len(objects)
+                if filtered_count > 0:
+                    print(f"  ℹ️  区域过滤: 原始 {original_count} 个 → 区域内 {len(objects)} 个 (过滤掉 {filtered_count} 个)")
+        
         # 构建结果
         result_data = {
             'objects': objects,
@@ -504,7 +687,6 @@ class BatchInferenceProcessor:
         
         # 跟踪和绊线检测
         line_crossing_results = None
-        regions = []
         trackers = []
         
         if TRACKER_MANAGER and detections:
@@ -551,12 +733,23 @@ class BatchInferenceProcessor:
         if result_data.get('objects') and len(result_data['objects']) > 0:
             avg_confidence = sum(obj['confidence'] for obj in result_data['objects']) / len(result_data['objects'])
         
+        # 计算总处理时间（从提交到现在）
+        total_time = (time.time() - request.submit_time) * 1000
+        
+        # 更新最近一次时间统计
+        global BATCH_STATS
+        BATCH_STATS['last_inference_time'] = inference_time_per_image
+        BATCH_STATS['last_total_time'] = total_time
+        
         # 保存结果
         request.result = {
             'success': True,
             'result': result_data,
             'confidence': avg_confidence,
-            'inference_time_ms': int(inference_time_per_image)
+            'inference_time_ms': round(inference_time_per_image, 2),  # 模型推理时间
+            'total_time_ms': round(total_time, 2),  # 全部处理时间（包含等待、推理、后处理）
+            'image_url': request_data.get('image_url', ''),  # 请求的图片URL
+            'task_id': task_id  # 任务ID
         }
     
     def stop(self):
@@ -634,6 +827,8 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
             self.handle_inference()
         elif self.path == '/health':
             self.handle_health()
+        elif self.path == '/reset_stats':
+            self.handle_reset_stats()
         else:
             self.send_error(404, "Not Found")
     
@@ -654,20 +849,225 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'text/html; charset=utf-8')
         self.end_headers()
         
+        batching_status = "启用" if CONFIG['enable_batching'] else "禁用"
         html = f"""
         <!DOCTYPE html>
         <html>
         <head>
             <title>{CONFIG['name']}</title>
             <meta charset="utf-8">
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    max-width: 900px;
+                    margin: 50px auto;
+                    padding: 20px;
+                    background: #f5f5f5;
+                }}
+                .container {{
+                    background: white;
+                    padding: 30px;
+                    border-radius: 10px;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                }}
+                h1 {{
+                    color: #333;
+                    border-bottom: 3px solid #2196F3;
+                    padding-bottom: 10px;
+                }}
+                .info-grid {{
+                    display: grid;
+                    grid-template-columns: repeat(2, 1fr);
+                    gap: 15px;
+                    margin: 20px 0;
+                }}
+                .info-item {{
+                    padding: 15px;
+                    background: #f9f9f9;
+                    border-radius: 5px;
+                    border-left: 4px solid #2196F3;
+                }}
+                .info-item strong {{
+                    color: #666;
+                    display: block;
+                    margin-bottom: 5px;
+                    font-size: 14px;
+                }}
+                .info-item span {{
+                    color: #333;
+                    font-size: 18px;
+                    font-weight: bold;
+                }}
+                .stats-section {{
+                    margin: 30px 0;
+                    padding: 20px;
+                    background: #e3f2fd;
+                    border-radius: 5px;
+                }}
+                .stats-section h2 {{
+                    margin-top: 0;
+                    color: #1565c0;
+                }}
+                .stat-value {{
+                    font-size: 32px;
+                    font-weight: bold;
+                    color: #0d47a1;
+                    margin: 10px 0;
+                }}
+                .btn {{
+                    background: #f44336;
+                    color: white;
+                    border: none;
+                    padding: 12px 30px;
+                    font-size: 16px;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    transition: background 0.3s;
+                }}
+                .btn:hover {{
+                    background: #d32f2f;
+                }}
+                .btn:active {{
+                    transform: scale(0.98);
+                }}
+                .message {{
+                    padding: 15px;
+                    margin: 15px 0;
+                    border-radius: 5px;
+                    display: none;
+                }}
+                .message.success {{
+                    background: #4CAF50;
+                    color: white;
+                }}
+                .endpoints {{
+                    margin: 20px 0;
+                    padding: 15px;
+                    background: #fff3cd;
+                    border-radius: 5px;
+                    border-left: 4px solid #ffc107;
+                }}
+                .endpoints code {{
+                    background: #fff;
+                    padding: 2px 6px;
+                    border-radius: 3px;
+                    font-family: monospace;
+                }}
+            </style>
         </head>
         <body>
-            <h1>{CONFIG['name']}</h1>
-            <p><strong>服务ID:</strong> {CONFIG['service_id']}</p>
-            <p><strong>版本:</strong> {CONFIG['version']}</p>
-            <p><strong>支持任务类型:</strong> {', '.join(CONFIG['task_types'])}</p>
-            <p><strong>推理端点:</strong> POST /infer</p>
-            <p><strong>健康检查:</strong> GET /health</p>
+            <div class="container">
+                <h1>🚶 {CONFIG['name']}</h1>
+                
+                <div class="info-grid">
+                    <div class="info-item">
+                        <strong>服务ID</strong>
+                        <span>{CONFIG['service_id']}</span>
+                    </div>
+                    <div class="info-item">
+                        <strong>版本</strong>
+                        <span>{CONFIG['version']}</span>
+                    </div>
+                    <div class="info-item">
+                        <strong>支持任务类型</strong>
+                        <span>{', '.join(CONFIG['task_types'])}</span>
+                    </div>
+                    <div class="info-item">
+                        <strong>批处理模式</strong>
+                        <span>{batching_status}</span>
+                    </div>
+                </div>
+
+                <div class="stats-section">
+                    <h2>📊 实时统计</h2>
+                    <div class="info-item">
+                        <strong>累积推理次数</strong>
+                        <div class="stat-value" id="total-requests">加载中...</div>
+                    </div>
+                    <div class="info-item" style="margin-top: 15px;">
+                        <strong>平均推理时间</strong>
+                        <div class="stat-value" id="avg-time">加载中...</div>
+                    </div>
+                    <div class="info-item" style="margin-top: 15px;">
+                        <strong>总批次数</strong>
+                        <div class="stat-value" id="total-batches">加载中...</div>
+                    </div>
+                    <button class="btn" onclick="resetStats()">🔄 清零统计数据</button>
+                    <div id="message" class="message"></div>
+                </div>
+
+                <div class="endpoints">
+                    <h3>🔌 API 端点</h3>
+                    <p><strong>推理:</strong> <code>POST /infer</code></p>
+                    <p><strong>健康检查:</strong> <code>GET /health</code></p>
+                    <p><strong>统计信息:</strong> <code>GET /stats</code></p>
+                    <p><strong>清零统计:</strong> <code>POST /reset_stats</code></p>
+                </div>
+            </div>
+
+            <script>
+                // 加载统计数据
+                function loadStats() {{
+                    fetch('/stats')
+                        .then(res => res.json())
+                        .then(data => {{
+                            const stats = data.statistics || {{}};
+                            const totalRequests = stats.total_requests || 0;
+                            const totalBatches = stats.total_batches || 0;
+                            
+                            // 计算平均推理时间
+                            let avgTime = 0;
+                            if (totalRequests > 0 && stats.total_inference_time) {{
+                                avgTime = stats.total_inference_time / totalRequests;
+                            }}
+                            
+                            document.getElementById('total-requests').textContent = totalRequests.toLocaleString();
+                            document.getElementById('avg-time').textContent = avgTime.toFixed(2) + ' ms';
+                            document.getElementById('total-batches').textContent = totalBatches.toLocaleString();
+                        }})
+                        .catch(err => {{
+                            console.error('加载统计失败:', err);
+                            document.getElementById('total-requests').textContent = '加载失败';
+                            document.getElementById('avg-time').textContent = '加载失败';
+                            document.getElementById('total-batches').textContent = '加载失败';
+                        }});
+                }}
+
+                // 清零统计数据
+                function resetStats() {{
+                    if (!confirm('确定要清零所有统计数据吗？')) {{
+                        return;
+                    }}
+                    
+                    fetch('/reset_stats', {{ method: 'POST' }})
+                        .then(res => res.json())
+                        .then(data => {{
+                            if (data.success) {{
+                                showMessage('统计数据已清零', 'success');
+                                loadStats();
+                            }}
+                        }})
+                        .catch(err => {{
+                            console.error('清零失败:', err);
+                            alert('清零失败: ' + err);
+                        }});
+                }}
+
+                // 显示消息
+                function showMessage(msg, type) {{
+                    const msgDiv = document.getElementById('message');
+                    msgDiv.textContent = msg;
+                    msgDiv.className = 'message ' + type;
+                    msgDiv.style.display = 'block';
+                    setTimeout(() => {{
+                        msgDiv.style.display = 'none';
+                    }}, 3000);
+                }}
+
+                // 初始加载和定时刷新
+                loadStats();
+                setInterval(loadStats, 3000);  // 每3秒刷新一次
+            </script>
         </body>
         </html>
         """
@@ -709,18 +1109,44 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
         
         self.wfile.write(json.dumps(stats, indent=2).encode('utf-8'))
     
+    def handle_reset_stats(self):
+        """清零统计数据"""
+        global BATCH_STATS
+        
+        BATCH_STATS['total_requests'] = 0
+        BATCH_STATS['total_batches'] = 0
+        BATCH_STATS['total_inference_time'] = 0.0
+        BATCH_STATS['avg_batch_size'] = 0.0
+        BATCH_STATS['max_batch_size'] = 0
+        BATCH_STATS['last_inference_time'] = 0.0
+        BATCH_STATS['last_total_time'] = 0.0
+        
+        print(f"\n[{time.strftime('%H:%M:%S')}] 统计数据已清零")
+        
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        
+        response = {
+            'success': True,
+            'message': '统计数据已清零'
+        }
+        self.wfile.write(json.dumps(response).encode('utf-8'))
+    
     def handle_inference(self):
         """处理推理请求"""
         global MODEL, TRACKER_MANAGER, BATCH_PROCESSOR
         
         start_time = time.time()
+        image_url = ''
+        task_id = 'unknown'
         
         try:
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
             request_data = json.loads(post_data.decode('utf-8'))
             
-            image_url = request_data.get('image_url')
+            image_url = request_data.get('image_url', '')
             task_id = request_data.get('task_id', 'unknown')
             
             if not image_url:
@@ -779,7 +1205,8 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
                     pass
                 
                 total_time = (time.time() - start_time) * 1000
-                print(f"  推理完成: 总耗时 {total_time:.0f}ms")
+                inference_time = response.get('inference_time_ms', 0)
+                print(f"  推理完成: 推理时间 {inference_time:.0f}ms, 总耗时 {total_time:.0f}ms")
                 print(f"="*60)
             
             # 发送响应
@@ -793,11 +1220,16 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
             import traceback
             traceback.print_exc()
             
+            total_time = (time.time() - start_time) * 1000
+            
             error_response = {
                 'success': False,
                 'error': str(e),
                 'confidence': 0.0,
-                'inference_time_ms': 0
+                'inference_time_ms': 0,
+                'total_time_ms': round(total_time, 2),
+                'image_url': image_url,  # 请求的图片URL
+                'task_id': task_id  # 任务ID
             }
             
             self.send_response(500)
@@ -895,7 +1327,20 @@ def heartbeat_loop():
             break
         
         try:
-            response = requests.post(url, timeout=5)
+            # 计算平均推理时间
+            avg_inference_time = 0.0
+            if BATCH_STATS['total_requests'] > 0:
+                avg_inference_time = BATCH_STATS['total_inference_time'] / BATCH_STATS['total_requests']
+            
+            # 携带统计信息
+            payload = {
+                'total_requests': BATCH_STATS['total_requests'],
+                'avg_inference_time_ms': round(avg_inference_time, 2),
+                'last_inference_time_ms': round(BATCH_STATS['last_inference_time'], 2),  # 最近一次推理时间
+                'last_total_time_ms': round(BATCH_STATS['last_total_time'], 2)  # 最近一次总耗时
+            }
+            
+            response = requests.post(url, json=payload, timeout=5)
             if response.status_code == 200:
                 print(f"[{time.strftime('%H:%M:%S')}] 心跳发送成功")
             else:
