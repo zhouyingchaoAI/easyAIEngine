@@ -47,3 +47,14 @@ Thumbs.db
 weight/*.om
 weight/*.pt
 
+# Build artifacts
+build/
+dist/
+*.spec
+build.sh
+
+# Temporary analysis reports
+*_analysis*.md
+*_report.md
+GITHUB_*.md
+SSH_*.md
