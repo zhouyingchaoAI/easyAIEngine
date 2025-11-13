@@ -42,7 +42,7 @@ CONFIG = {
     'task_types': ['人数统计'],
     'port': 7902,
     'host': '172.16.5.207',
-    'easydarwin_url': '172.16.5.207:5066',
+    'easydarwin_url': '127.0.0.1:5066',
     'heartbeat_interval': 30,
     'log_dir': '/cv_space/predict/logs',
     'log_file': 'realtime_detector.log',
@@ -346,12 +346,13 @@ def filter_objects_by_region(objects, regions_or_config, image_size):
                 x1, y1 = converted_p1
                 x2, y2 = converted_p2
                 
-                # 确保 x1 < x2, y1 < y2
+                # 确保 x1 <= x2, y1 <= y2（处理边界情况）
                 x1, x2 = min(x1, x2), max(x1, x2)
                 y1, y2 = min(y1, y2), max(y1, y2)
                 
-                # 判断中心点是否在矩形内
-                if x1 <= center_x <= x2 and y1 <= center_y <= y2:
+                # 判断中心点是否在矩形内（包括边界）
+                # 注意：必须同时满足 x 和 y 都在范围内，才能认为在矩形内
+                if (x1 <= center_x <= x2) and (y1 <= center_y <= y2):
                     in_any_region = True
                     break
                     
@@ -391,6 +392,8 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
             self.handle_health()
         elif self.path == '/reset_stats':
             self.handle_reset_stats()
+        elif self.path == '/config':
+            self.handle_config_post()
         else:
             self.send_error(404, "Not Found")
     
@@ -401,6 +404,8 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
             self.handle_index()
         elif self.path == '/stats':
             self.handle_stats()
+        elif self.path == '/config':
+            self.handle_config_get()
         else:
             self.send_error(404, "Not Found")
     
@@ -500,6 +505,10 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
                     background: #4CAF50;
                     color: white;
                 }}
+                .message.error {{
+                    background: #f44336;
+                    color: white;
+                }}
                 .endpoints {{
                     margin: 20px 0;
                     padding: 15px;
@@ -512,6 +521,68 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
                     padding: 2px 6px;
                     border-radius: 3px;
                     font-family: monospace;
+                }}
+                .config-section {{
+                    margin: 30px 0;
+                    padding: 20px;
+                    background: #e3f2fd;
+                    border-radius: 5px;
+                    border-left: 4px solid #2196F3;
+                }}
+                .config-section h2 {{
+                    margin-top: 0;
+                    color: #1565c0;
+                }}
+                .form-group {{
+                    margin: 15px 0;
+                }}
+                .form-group label {{
+                    display: block;
+                    margin-bottom: 5px;
+                    color: #333;
+                    font-weight: bold;
+                }}
+                .form-group input {{
+                    width: 100%;
+                    padding: 10px;
+                    border: 1px solid #ddd;
+                    border-radius: 5px;
+                    font-size: 14px;
+                    box-sizing: border-box;
+                }}
+                .form-group input:focus {{
+                    outline: none;
+                    border-color: #2196F3;
+                    box-shadow: 0 0 5px rgba(33, 150, 243, 0.3);
+                }}
+                .btn-primary {{
+                    background: #2196F3;
+                    color: white;
+                    border: none;
+                    padding: 12px 30px;
+                    font-size: 16px;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    transition: background 0.3s;
+                }}
+                .btn-primary:hover {{
+                    background: #1976D2;
+                }}
+                .status-badge {{
+                    display: inline-block;
+                    padding: 5px 10px;
+                    border-radius: 15px;
+                    font-size: 12px;
+                    font-weight: bold;
+                    margin-left: 10px;
+                }}
+                .status-badge.registered {{
+                    background: #4CAF50;
+                    color: white;
+                }}
+                .status-badge.unregistered {{
+                    background: #f44336;
+                    color: white;
                 }}
             </style>
         </head>
@@ -538,6 +609,28 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
                     </div>
                 </div>
 
+                <div class="config-section">
+                    <h2>⚙️ 服务配置</h2>
+                    <form id="configForm" onsubmit="updateConfig(event)">
+                        <div class="form-group">
+                            <label for="easydarwin_url">EasyDarwin地址:</label>
+                            <input type="text" id="easydarwin_url" name="easydarwin_url" 
+                                   placeholder="127.0.0.1:5066 或 http://127.0.0.1:5066" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="host_ip">主机IP地址 (可选):</label>
+                            <input type="text" id="host_ip" name="host_ip" 
+                                   placeholder="留空则默认使用 127.0.0.1">
+                        </div>
+                        <div class="form-group">
+                            <label>注册状态:</label>
+                            <span id="register-status" class="status-badge unregistered">未注册</span>
+                        </div>
+                        <button type="submit" class="btn-primary">💾 保存配置</button>
+                        <div id="config-message" class="message"></div>
+                    </form>
+                </div>
+
                 <div class="stats-section">
                     <h2>📊 实时统计</h2>
                     <div class="info-item">
@@ -557,11 +650,122 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
                     <p><strong>推理:</strong> <code>POST /infer</code></p>
                     <p><strong>健康检查:</strong> <code>GET /health</code></p>
                     <p><strong>统计信息:</strong> <code>GET /stats</code></p>
+                    <p><strong>配置管理:</strong> <code>GET /config</code> | <code>POST /config</code></p>
                     <p><strong>清零统计:</strong> <code>POST /reset_stats</code></p>
                 </div>
             </div>
 
             <script>
+                let configRefreshInterval = null;
+                let isEditingEasydarwin = false;
+                let isEditingHostIp = false;
+                
+                // 加载配置
+                function loadConfig() {{
+                    // 如果用户正在编辑，不刷新输入框的值
+                    if (isEditingEasydarwin || isEditingHostIp) {{
+                        return;
+                    }}
+                    
+                    fetch('/config')
+                        .then(res => res.json())
+                        .then(data => {{
+                            // 显示时去掉 http:// 或 https:// 前缀，让用户看到更简洁的格式
+                            let easydarwinUrl = data.easydarwin_url || '';
+                            if (easydarwinUrl.startsWith('http://')) {{
+                                easydarwinUrl = easydarwinUrl.substring(7);
+                            }} else if (easydarwinUrl.startsWith('https://')) {{
+                                easydarwinUrl = easydarwinUrl.substring(8);
+                            }}
+                            
+                            if (!isEditingEasydarwin) {{
+                                document.getElementById('easydarwin_url').value = easydarwinUrl;
+                            }}
+                            if (!isEditingHostIp) {{
+                                document.getElementById('host_ip').value = data.host_ip || '';
+                            }}
+                            updateRegisterStatus(data.registered);
+                        }})
+                        .catch(err => {{
+                            console.error('加载配置失败:', err);
+                        }});
+                }}
+
+                // 更新配置
+                function updateConfig(event) {{
+                    event.preventDefault();
+                    
+                    const easydarwinUrl = document.getElementById('easydarwin_url').value.trim();
+                    const hostIp = document.getElementById('host_ip').value.trim();
+                    
+                    if (!easydarwinUrl) {{
+                        showConfigMessage('EasyDarwin地址不能为空', 'error');
+                        return;
+                    }}
+                    
+                    const payload = {{
+                        easydarwin_url: easydarwinUrl,
+                        host_ip: hostIp || null
+                    }};
+                    
+                    fetch('/config', {{
+                        method: 'POST',
+                        headers: {{
+                            'Content-Type': 'application/json'
+                        }},
+                        body: JSON.stringify(payload)
+                    }})
+                    .then(res => res.json())
+                    .then(data => {{
+                        if (data.success) {{
+                            showConfigMessage('配置已保存并重新注册服务', 'success');
+                            updateRegisterStatus(data.config.registered);
+                            // 更新输入框显示值（去掉 http:// 前缀）
+                            let easydarwinUrl = data.config.easydarwin_url || '';
+                            if (easydarwinUrl.startsWith('http://')) {{
+                                easydarwinUrl = easydarwinUrl.substring(7);
+                            }} else if (easydarwinUrl.startsWith('https://')) {{
+                                easydarwinUrl = easydarwinUrl.substring(8);
+                            }}
+                            document.getElementById('easydarwin_url').value = easydarwinUrl;
+                            document.getElementById('host_ip').value = data.config.host_ip || '';
+                            // 延迟刷新配置以确保状态同步（但不更新输入框，因为已经更新了）
+                            setTimeout(function() {{
+                                updateRegisterStatus(data.config.registered);
+                            }}, 1000);
+                        }} else {{
+                            showConfigMessage('保存失败: ' + (data.message || '未知错误'), 'error');
+                        }}
+                    }})
+                    .catch(err => {{
+                        console.error('更新配置失败:', err);
+                        showConfigMessage('更新配置失败: ' + err, 'error');
+                    }});
+                }}
+
+                // 更新注册状态显示
+                function updateRegisterStatus(registered) {{
+                    const statusBadge = document.getElementById('register-status');
+                    if (registered) {{
+                        statusBadge.textContent = '已注册';
+                        statusBadge.className = 'status-badge registered';
+                    }} else {{
+                        statusBadge.textContent = '未注册';
+                        statusBadge.className = 'status-badge unregistered';
+                    }}
+                }}
+
+                // 显示配置消息
+                function showConfigMessage(msg, type) {{
+                    const msgDiv = document.getElementById('config-message');
+                    msgDiv.textContent = msg;
+                    msgDiv.className = 'message ' + (type === 'success' ? 'success' : 'error');
+                    msgDiv.style.display = 'block';
+                    setTimeout(() => {{
+                        msgDiv.style.display = 'none';
+                    }}, 5000);
+                }}
+
                 // 加载统计数据
                 function loadStats() {{
                     fetch('/stats')
@@ -612,8 +816,39 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
                 }}
 
                 // 初始加载和定时刷新
+                loadConfig();
                 loadStats();
                 setInterval(loadStats, 3000);  // 每3秒刷新一次
+                setInterval(loadConfig, 5000);  // 每5秒刷新配置状态（仅在未编辑时）
+                
+                // 监听输入框焦点事件，防止编辑时被刷新覆盖
+                // 使用 setTimeout 确保 DOM 元素已经加载
+                setTimeout(function() {{
+                    const easydarwinInput = document.getElementById('easydarwin_url');
+                    const hostIpInput = document.getElementById('host_ip');
+                    
+                    if (easydarwinInput) {{
+                        easydarwinInput.addEventListener('focus', function() {{
+                            isEditingEasydarwin = true;
+                        }});
+                        easydarwinInput.addEventListener('blur', function() {{
+                            isEditingEasydarwin = false;
+                            // 失去焦点后立即刷新一次
+                            setTimeout(loadConfig, 100);
+                        }});
+                    }}
+                    
+                    if (hostIpInput) {{
+                        hostIpInput.addEventListener('focus', function() {{
+                            isEditingHostIp = true;
+                        }});
+                        hostIpInput.addEventListener('blur', function() {{
+                            isEditingHostIp = false;
+                            // 失去焦点后立即刷新一次
+                            setTimeout(loadConfig, 100);
+                        }});
+                    }}
+                }}, 100);
             </script>
         </body>
         </html>
@@ -672,6 +907,128 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
             'message': '统计数据已清零'
         }
         self.wfile.write(json.dumps(response).encode('utf-8'))
+    
+    def handle_config_get(self):
+        """获取当前配置"""
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        
+        response = {
+            'easydarwin_url': CONFIG.get('easydarwin_url', ''),
+            'service_id': CONFIG.get('service_id', ''),
+            'name': CONFIG.get('name', ''),
+            'port': CONFIG.get('port', 0),
+            'host': CONFIG.get('host', ''),
+            'host_ip': CONFIG.get('host_ip', ''),
+            'registered': REGISTERED
+        }
+        self.wfile.write(json.dumps(response, indent=2).encode('utf-8'))
+    
+    def handle_config_post(self):
+        """更新配置"""
+        global REGISTERED, HEARTBEAT_THREAD, REGISTER_THREAD
+        
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            if content_length == 0:
+                self.send_error(400, "Bad Request: Empty body")
+                return
+            
+            post_data = self.rfile.read(content_length)
+            request_data = json.loads(post_data.decode('utf-8'))
+            
+            # 更新easydarwin_url
+            if 'easydarwin_url' in request_data:
+                new_url = request_data['easydarwin_url'].strip()
+                if new_url:
+                    # 规范化URL，确保包含协议前缀
+                    if not (new_url.startswith('http://') or new_url.startswith('https://')):
+                        new_url = f"http://{new_url}"
+                    
+                    old_url = CONFIG['easydarwin_url']
+                    CONFIG['easydarwin_url'] = new_url
+                    print(f"\n[{time.strftime('%H:%M:%S')}] EasyDarwin地址已更新: {old_url} -> {new_url}")
+                    
+                    # 如果之前已注册，先注销
+                    if REGISTERED:
+                        try:
+                            unregister_service()
+                        except:
+                            pass
+                        REGISTERED = False
+                    
+                    # 重新注册服务
+                    if register_service():
+                        # 如果立即成功，启动心跳线程
+                        if HEARTBEAT_THREAD is None or not HEARTBEAT_THREAD.is_alive():
+                            HEARTBEAT_THREAD = threading.Thread(target=heartbeat_loop, daemon=True)
+                            HEARTBEAT_THREAD.start()
+                        # 停止注册重试线程（如果存在）
+                        if REGISTER_THREAD and REGISTER_THREAD.is_alive():
+                            pass  # 线程会自动停止
+                    else:
+                        # 如果失败，启动注册重试线程
+                        if REGISTER_THREAD is None or not REGISTER_THREAD.is_alive():
+                            REGISTER_THREAD = threading.Thread(target=register_retry_loop, daemon=True)
+                            REGISTER_THREAD.start()
+            
+            # 更新其他配置
+            if 'host_ip' in request_data:
+                old_host_ip = CONFIG.get('host_ip')
+                CONFIG['host_ip'] = request_data['host_ip'].strip() or None
+                print(f"[{time.strftime('%H:%M:%S')}] 主机IP已更新: {old_host_ip} -> {CONFIG['host_ip']}")
+                
+                # 如果之前已注册，重新注册服务以使用新的端点地址
+                if REGISTERED:
+                    try:
+                        unregister_service()
+                    except:
+                        pass
+                    REGISTERED = False
+                    
+                    # 重新注册服务
+                    if register_service():
+                        # 如果立即成功，启动心跳线程
+                        if HEARTBEAT_THREAD is None or not HEARTBEAT_THREAD.is_alive():
+                            HEARTBEAT_THREAD = threading.Thread(target=heartbeat_loop, daemon=True)
+                            HEARTBEAT_THREAD.start()
+                        # 停止注册重试线程（如果存在）
+                        if REGISTER_THREAD and REGISTER_THREAD.is_alive():
+                            pass  # 线程会自动停止
+                    else:
+                        # 如果失败，启动注册重试线程
+                        if REGISTER_THREAD is None or not REGISTER_THREAD.is_alive():
+                            REGISTER_THREAD = threading.Thread(target=register_retry_loop, daemon=True)
+                            REGISTER_THREAD.start()
+            
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            
+            response = {
+                'success': True,
+                'message': '配置已更新',
+                'config': {
+                    'easydarwin_url': CONFIG['easydarwin_url'],
+                    'host_ip': CONFIG.get('host_ip', ''),
+                    'registered': REGISTERED
+                }
+            }
+            self.wfile.write(json.dumps(response).encode('utf-8'))
+            
+        except json.JSONDecodeError:
+            self.send_error(400, "Bad Request: Invalid JSON")
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] 更新配置失败: {e}")
+            self.send_response(500)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            response = {
+                'success': False,
+                'message': f'更新配置失败: {str(e)}'
+            }
+            self.wfile.write(json.dumps(response).encode('utf-8'))
     
     def handle_inference(self):
         """处理推理请求（实时检测专用）"""
@@ -858,42 +1215,16 @@ def register_service(quiet=False):
     
     url = f"{CONFIG['easydarwin_url']}/api/v1/ai_analysis/register"
     
-    # 优先使用手动指定的主机IP，然后是自动检测
+    # 优先使用手动指定的主机IP，然后是默认值127.0.0.1
     endpoint = f"http://{CONFIG['host']}:{CONFIG['port']}/infer"
     if CONFIG['host'] == '0.0.0.0':
-        # 如果手动指定了主机IP，直接使用
-        if CONFIG.get('host_ip'):
-            endpoint = f"http://{CONFIG['host_ip']}:{CONFIG['port']}/infer"
+        # 如果手动指定了主机IP且不为空，直接使用
+        host_ip = CONFIG.get('host_ip')
+        if host_ip and host_ip.strip():
+            endpoint = f"http://{host_ip.strip()}:{CONFIG['port']}/infer"
         else:
-            # 自动检测主机IP
-            import socket
-            try:
-                # 尝试获取主机的外部IP地址
-                # 方法1: 通过连接外部服务获取本机IP
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                try:
-                    # 连接到一个外部地址（不会实际发送数据）
-                    s.connect(("8.8.8.8", 80))
-                    local_ip = s.getsockname()[0]
-                except:
-                    # 方法2: 回退到hostname解析
-                    hostname = socket.gethostname()
-                    local_ip = socket.gethostbyname(hostname)
-                finally:
-                    s.close()
-                
-                # 如果获取到的是127.0.0.1或容器内部地址，尝试其他方法
-                if local_ip.startswith('127.') or local_ip.startswith('172.17.') or local_ip.startswith('192.168.'):
-                    # 尝试从环境变量获取主机IP
-                    import os
-                    host_ip = os.environ.get('HOST_IP') or os.environ.get('HOST_ADDR')
-                    if host_ip:
-                        local_ip = host_ip
-                
-                endpoint = f"http://{local_ip}:{CONFIG['port']}/infer"
-            except:
-                # 如果都失败了，使用默认的0.0.0.0
-                endpoint = f"http://0.0.0.0:{CONFIG['port']}/infer"
+            # 默认使用127.0.0.1
+            endpoint = f"http://127.0.0.1:{CONFIG['port']}/infer"
     
     payload = {
         'service_id': CONFIG['service_id'],
@@ -1057,7 +1388,7 @@ def main():
                         help='监听端口 (默认: 7901)')
     parser.add_argument('--host', default='0.0.0.0',
                         help='监听地址')
-    parser.add_argument('--easydarwin', default='172.16.5.207:5066',
+    parser.add_argument('--easydarwin', default='127.0.0.1:5066',
                         help='EasyDarwin地址')
     parser.add_argument('--model', default='./weight/best.om',
                         help='OM模型路径 (.om)')

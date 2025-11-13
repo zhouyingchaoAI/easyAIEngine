@@ -429,7 +429,11 @@ HTML_TEMPLATE = '''
                     </div>
                     <div class="form-group">
                         <label>推理端点IP</label>
-                        <input type="text" id="realtime-infer-ip-input" value="172.17.0.2" placeholder="例如: 172.17.0.2">
+                        <input type="text" id="realtime-infer-ip-input" value="127.0.0.1" placeholder="例如: 127.0.0.1">
+                    </div>
+                    <div class="form-group full-width">
+                        <label>EasyDarwin地址</label>
+                        <input type="text" id="realtime-easydarwin-input" value="127.0.0.1:5066" placeholder="例如: 127.0.0.1:5066 或 http://127.0.0.1:5066">
                     </div>
                 </div>
                 
@@ -558,7 +562,7 @@ HTML_TEMPLATE = '''
                 const count = (ins.stats && ins.stats.total_requests != null) ? ins.stats.total_requests : '-';
                 const lastInferTime = (ins.stats && ins.stats.last_inference_time != null) ? ins.stats.last_inference_time.toFixed(2) : '-';
                 const lastTotalTime = (ins.stats && ins.stats.last_total_time != null) ? ins.stats.last_total_time.toFixed(2) : '-';
-                const inferIp = ins.config.infer_ip || '172.17.0.2';
+                const inferIp = ins.config.infer_ip || '127.0.0.1';
                 const inferUrl = `http://${inferIp}:${ins.config.port}/infer`;
                 const serviceId = ins.config.service_id || `实例_${ins.pid}`;
                 return `
@@ -642,7 +646,8 @@ HTML_TEMPLATE = '''
             const devices = document.getElementById(`${serviceKey}-devices-input`).value;
             const port = document.getElementById(`${serviceKey}-port-input`).value;
             const batchSize = document.getElementById(`${serviceKey}-batch-input`).value;
-            const inferIp = document.getElementById(`${serviceKey}-infer-ip-input`).value || '172.17.0.2';
+            const inferIp = document.getElementById(`${serviceKey}-infer-ip-input`).value || '127.0.0.1';
+            const easydarwinUrl = document.getElementById(`${serviceKey}-easydarwin-input`).value || '127.0.0.1:5066';
             const servicePrefix = document.getElementById(`${serviceKey}-service-prefix-input`).value || 'yolo11x_head_detector';
             
             try {
@@ -656,6 +661,7 @@ HTML_TEMPLATE = '''
                         port: parseInt(port),
                         batch_size: parseInt(batchSize),
                         infer_ip: inferIp,
+                        easydarwin_url: easydarwinUrl,
                         service_id_prefix: servicePrefix
                     })
                 });
@@ -1163,7 +1169,8 @@ def api_start_service():
     devices_raw = data.get('device_ids', '0')
     port = data.get('port', 0)
     batch_size = data.get('batch_size', 8)
-    infer_ip = data.get('infer_ip', '172.17.0.2')  # 推理端点IP，默认为172.17.0.2
+    infer_ip = data.get('infer_ip', '127.0.0.1')  # 推理端点IP，默认为127.0.0.1
+    easydarwin_url = data.get('easydarwin_url', '127.0.0.1:5066')  # EasyDarwin地址，默认为127.0.0.1:5066
     service_id_prefix = data.get('service_id_prefix', 'yolo11x_head_detector')
     
     if service_key not in SERVICES:
@@ -1247,7 +1254,7 @@ def api_start_service():
                 '--service-id', f"{service_id_prefix}_{inst_port}",
                 '--port', str(inst_port),
                 '--device-id', str(device_id),
-                '--easydarwin', 'http://172.16.5.207:5066',
+                '--easydarwin', easydarwin_url,
                 '--host-ip', infer_ip  # 传递推理端点IP给服务，用于注册到EasyDarwin
             ]
 
@@ -1256,6 +1263,7 @@ def api_start_service():
             log_handle.write(f"服务启动: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             log_handle.write(f"DEVICE: {device_id}, 端口: {inst_port}, 批处理: {batch_size}\n")
             log_handle.write(f"服务ID: {service_id_prefix}_{inst_port}\n")
+            log_handle.write(f"EasyDarwin地址: {easydarwin_url}\n")
             log_handle.write(f"推理端点IP: {infer_ip} (用于注册到EasyDarwin)\n")
             log_handle.write(f"{'='*60}\n")
             log_handle.flush()

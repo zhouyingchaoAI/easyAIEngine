@@ -219,12 +219,13 @@ def filter_objects_by_region(objects, regions_or_config, image_size):
                 x1, y1 = converted_p1
                 x2, y2 = converted_p2
                 
-                # 确保 x1 < x2, y1 < y2
+                # 确保 x1 <= x2, y1 <= y2（处理边界情况）
                 x1, x2 = min(x1, x2), max(x1, x2)
                 y1, y2 = min(y1, y2), max(y1, y2)
                 
-                # 判断中心点是否在矩形内
-                if x1 <= center_x <= x2 and y1 <= center_y <= y2:
+                # 判断中心点是否在矩形内（包括边界）
+                # 注意：必须同时满足 x 和 y 都在范围内，才能认为在矩形内
+                if (x1 <= center_x <= x2) and (y1 <= center_y <= y2):
                     in_any_region = True
                     break
                     
