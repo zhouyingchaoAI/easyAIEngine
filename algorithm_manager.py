@@ -17,11 +17,46 @@ import socket
 from datetime import datetime
 import urllib.request
 import urllib.error
+from pathlib import Path
+
+# 获取可执行文件所在目录（支持PyInstaller打包后的情况）
+def get_base_dir():
+    """获取程序基础目录（logs、configs、weight的同级目录）"""
+    if getattr(sys, 'frozen', False):
+        # PyInstaller打包后的情况
+        base_dir = Path(sys.executable).parent
+    else:
+        # 开发环境，使用脚本所在目录
+        base_dir = Path(__file__).parent
+    return base_dir.resolve()
+
+BASE_DIR = get_base_dir()
+LOGS_DIR = BASE_DIR / 'logs'
+CONFIGS_DIR = BASE_DIR / 'configs'
+WEIGHT_DIR = BASE_DIR / 'weight'
 
 app = Flask(__name__)
 CORS(app)
 
 # 全局变量存储服务进程
+# 检测是否在打包后的环境中运行
+def get_service_executable(script_name):
+    """获取服务可执行文件路径（支持打包后的环境）"""
+    # 首先检查可执行文件是否存在（打包后的环境）
+    exe_name = script_name.replace('.py', '')
+    exe_path = BASE_DIR / exe_name
+    if exe_path.exists() and exe_path.is_file():
+        # 检查是否有执行权限（可执行文件）
+        if os.access(exe_path, os.X_OK):
+            return str(exe_path)
+    
+    # 如果可执行文件不存在，检查Python脚本（开发环境）
+    script_path = BASE_DIR / script_name
+    if script_path.exists():
+        return 'python3'  # 返回解释器，脚本路径在命令中单独指定
+    
+    return None
+
 SERVICES = {
     'realtime': {
         'name': '实时检测服务',
@@ -34,6 +69,9 @@ SERVICES = {
         'instances': []
     }
 }
+
+# 存储每个实例的历史统计信息，用于计算每秒请求数
+INSTANCE_HISTORY = {}  # {pid: {'last_total_requests': 0, 'last_timestamp': time.time()}}
 
 # HTML模板
 HTML_TEMPLATE = '''
@@ -406,6 +444,20 @@ HTML_TEMPLATE = '''
                     </div>
                 </div>
 
+                <!-- 总计统计 -->
+                <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:12px;margin-bottom:12px;">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                        <div style="text-align:center;">
+                            <div style="font-size:11px;color:#0369a1;margin-bottom:4px;font-weight:500;">📥 总每秒请求数</div>
+                            <div id="realtime-total-requests-per-sec" style="font-size:20px;font-weight:700;color:#0284c7;">0.00 req/s</div>
+                        </div>
+                        <div style="text-align:center;">
+                            <div style="font-size:11px;color:#0369a1;margin-bottom:4px;font-weight:500;">📤 总每秒返回数</div>
+                            <div id="realtime-total-responses-per-sec" style="font-size:20px;font-weight:700;color:#0284c7;">0.00 res/s</div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="form-grid">
                     <div class="form-group full-width">
                         <label>服务ID前缀（批量实例自动递增）</label>
@@ -562,6 +614,8 @@ HTML_TEMPLATE = '''
                 const count = (ins.stats && ins.stats.total_requests != null) ? ins.stats.total_requests : '-';
                 const lastInferTime = (ins.stats && ins.stats.last_inference_time != null) ? ins.stats.last_inference_time.toFixed(2) : '-';
                 const lastTotalTime = (ins.stats && ins.stats.last_total_time != null) ? ins.stats.last_total_time.toFixed(2) : '-';
+                const requestsPerSec = (ins.stats && ins.stats.requests_per_second != null) ? ins.stats.requests_per_second.toFixed(2) : '-';
+                const responsesPerSec = (ins.stats && ins.stats.responses_per_second != null) ? ins.stats.responses_per_second.toFixed(2) : '-';
                 const inferIp = ins.config.infer_ip || '127.0.0.1';
                 const inferUrl = `http://${inferIp}:${ins.config.port}/infer`;
                 const serviceId = ins.config.service_id || `实例_${ins.pid}`;
@@ -591,6 +645,16 @@ HTML_TEMPLATE = '''
                     <div style="display:flex;justify-content:space-between;padding-top:6px;border-top:1px solid #e2e8f0;margin-top:6px;">
                         <div style="font-size:9px;color:#718096;">🕒 总耗时</div>
                         <div style="font-size:12px;font-weight:600;color:#4a5568;">${lastTotalTime} ms</div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;padding-top:6px;border-top:1px solid #e2e8f0;margin-top:6px;">
+                        <div>
+                            <div style="font-size:9px;color:#718096;margin-bottom:2px;">📥 每秒请求数</div>
+                            <div style="font-size:13px;font-weight:600;color:#48bb78;">${requestsPerSec} req/s</div>
+                        </div>
+                        <div style="text-align:right;">
+                            <div style="font-size:9px;color:#718096;margin-bottom:2px;">📤 每秒返回数</div>
+                            <div style="font-size:13px;font-weight:600;color:#4299e1;">${responsesPerSec} res/s</div>
+                        </div>
                     </div>
                     <div class="instance-endpoint">${inferUrl}</div>
                 </div>`;
@@ -634,6 +698,18 @@ HTML_TEMPLATE = '''
                     statusEl.textContent = isRunning ? `运行中 (${instances.length})` : '已停止';
                     statusEl.className = `status-badge ${isRunning ? 'status-running' : 'status-stopped'}`;
                     renderInstances(serviceKey, instances);
+                    
+                    // 更新总计统计
+                    const totalRequestsPerSec = service.total_requests_per_second || 0;
+                    const totalResponsesPerSec = service.total_responses_per_second || 0;
+                    const totalRequestsEl = document.getElementById(`${serviceKey}-total-requests-per-sec`);
+                    const totalResponsesEl = document.getElementById(`${serviceKey}-total-responses-per-sec`);
+                    if (totalRequestsEl) {
+                        totalRequestsEl.textContent = `${totalRequestsPerSec.toFixed(2)} req/s`;
+                    }
+                    if (totalResponsesEl) {
+                        totalResponsesEl.textContent = `${totalResponsesPerSec.toFixed(2)} res/s`;
+                    }
                 });
             } catch (error) {
                 console.error('加载服务状态失败:', error);
@@ -1110,17 +1186,25 @@ def api_gpu_debug():
 @app.route('/api/services')
 def api_services():
     """获取服务状态API（多实例）"""
+    global INSTANCE_HISTORY
     result = {}
+    current_time = time.time()
     
     for key, service in SERVICES.items():
         instances_out = []
         alive_instances = []
+        # 总计变量
+        total_requests_per_second = 0.0
+        total_responses_per_second = 0.0
+        
         # 清理死亡实例并收集状态
         for ins in service.get('instances', []):
             pid = ins.get('pid')
             if pid and get_process_status(pid):
                 # 查询实例统计
                 stats = None
+                requests_per_second = 0.0
+                responses_per_second = 0.0
                 try:
                     port = ins.get('config', {}).get('port')
                     if port:
@@ -1129,19 +1213,49 @@ def api_services():
                             if isinstance(data, dict):
                                 if 'statistics' in data and isinstance(data['statistics'], dict):
                                     s = data['statistics']
+                                    total_requests = s.get('total_requests', 0)
                                     stats = {
-                                        'total_requests': s.get('total_requests', 0),
+                                        'total_requests': total_requests,
                                         'last_inference_time': s.get('last_inference_time', 0),
                                         'last_total_time': s.get('last_total_time', 0)
                                     }
                                 elif 'total_requests' in data:
+                                    total_requests = data.get('total_requests', 0)
                                     stats = {
-                                        'total_requests': data.get('total_requests', 0),
+                                        'total_requests': total_requests,
                                         'last_inference_time': data.get('last_inference_time', 0),
                                         'last_total_time': data.get('last_total_time', 0)
                                     }
+                                
+                                # 计算每秒请求数和返回结果数
+                                if pid in INSTANCE_HISTORY:
+                                    history = INSTANCE_HISTORY[pid]
+                                    time_diff = current_time - history['last_timestamp']
+                                    if time_diff > 0:
+                                        requests_diff = total_requests - history['last_total_requests']
+                                        requests_per_second = requests_diff / time_diff
+                                        # 返回结果数通常等于请求数（每个请求都会返回结果）
+                                        responses_per_second = requests_per_second
+                                
+                                # 更新历史记录
+                                INSTANCE_HISTORY[pid] = {
+                                    'last_total_requests': total_requests,
+                                    'last_timestamp': current_time
+                                }
                 except Exception:
                     stats = None
+                    # 如果查询失败，清理历史记录
+                    if pid in INSTANCE_HISTORY:
+                        del INSTANCE_HISTORY[pid]
+                
+                # 将每秒请求数和返回结果数添加到stats中
+                if stats is not None:
+                    stats['requests_per_second'] = round(requests_per_second, 2)
+                    stats['responses_per_second'] = round(responses_per_second, 2)
+                    # 累加到总计
+                    total_requests_per_second += requests_per_second
+                    total_responses_per_second += responses_per_second
+                
                 ins['stats'] = stats
                 alive_instances.append(ins)
                 instances_out.append({
@@ -1149,12 +1263,19 @@ def api_services():
                     'config': ins.get('config', {}),
                     'stats': stats
                 })
+            else:
+                # 进程已死亡，清理历史记录
+                if pid and pid in INSTANCE_HISTORY:
+                    del INSTANCE_HISTORY[pid]
+        
         # 覆盖为存活实例
         service['instances'] = alive_instances
         
         result[key] = {
             'name': service['name'],
-            'instances': instances_out
+            'instances': instances_out,
+            'total_requests_per_second': round(total_requests_per_second, 2),
+            'total_responses_per_second': round(total_responses_per_second, 2)
         }
     
     return jsonify(result)
@@ -1205,7 +1326,7 @@ def api_start_service():
         reserved_ports = set()
 
         # 打开日志文件
-        log_dir = '/cv_space/predict/logs'
+        log_dir = str(LOGS_DIR)
         os.makedirs(log_dir, exist_ok=True)
         
         log_file_map = {
@@ -1248,15 +1369,37 @@ def api_start_service():
             device_id = device_ids[i % len(device_ids)]
 
             # 构建启动命令（Ascend: 通过 --device-id 传入）
-            cmd = [
-                'python3',
-                service['script'],
-                '--service-id', f"{service_id_prefix}_{inst_port}",
-                '--port', str(inst_port),
-                '--device-id', str(device_id),
-                '--easydarwin', easydarwin_url,
-                '--host-ip', infer_ip  # 传递推理端点IP给服务，用于注册到EasyDarwin
-            ]
+            # 使用相对路径，确保在打包后也能正确工作
+            model_path = str(WEIGHT_DIR / 'best.om')
+            
+            # 检测是否在打包后的环境中
+            service_exe = get_service_executable(service['script'])
+            if service_exe and service_exe != 'python3':
+                # 打包后的环境，直接使用可执行文件
+                cmd = [
+                    service_exe,
+                    '--service-id', f"{service_id_prefix}_{inst_port}",
+                    '--port', str(inst_port),
+                    '--device-id', str(device_id),
+                    '--easydarwin', easydarwin_url,
+                    '--host-ip', infer_ip,  # 传递推理端点IP给服务，用于注册到EasyDarwin
+                    '--model', model_path,  # 模型路径
+                    '--log-dir', str(LOGS_DIR)  # 日志目录
+                ]
+            else:
+                # 开发环境，使用Python运行脚本
+                script_path = str(BASE_DIR / service['script'])
+                cmd = [
+                    'python3',
+                    script_path,
+                    '--service-id', f"{service_id_prefix}_{inst_port}",
+                    '--port', str(inst_port),
+                    '--device-id', str(device_id),
+                    '--easydarwin', easydarwin_url,
+                    '--host-ip', infer_ip,  # 传递推理端点IP给服务，用于注册到EasyDarwin
+                    '--model', model_path,  # 模型路径
+                    '--log-dir', str(LOGS_DIR)  # 日志目录
+                ]
 
             # 记录日志标记
             log_handle.write(f"\n{'='*60}\n")
@@ -1270,7 +1413,7 @@ def api_start_service():
 
             process = subprocess.Popen(
                 cmd,
-                cwd='/code/predict',
+                cwd=str(BASE_DIR),
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
                 start_new_session=True
@@ -1309,6 +1452,7 @@ def api_start_service():
 @app.route('/api/stop-service', methods=['POST'])
 def api_stop_service():
     """停止服务API（支持停止单实例或全部）"""
+    global INSTANCE_HISTORY
     data = request.json
     service_key = data.get('service')
     pid_to_stop = data.get('pid')
@@ -1355,6 +1499,9 @@ def api_stop_service():
                     process.kill()
             except psutil.NoSuchProcess:
                 pass
+            # 清理历史记录
+            if pid and pid in INSTANCE_HISTORY:
+                del INSTANCE_HISTORY[pid]
             stopped += 1
         
         # 从实例列表移除
@@ -1376,7 +1523,7 @@ def api_logs():
     
     try:
         logs = []
-        log_dir = '/cv_space/predict/logs'
+        log_dir = str(LOGS_DIR)
         
         if service == 'all':
             # 合并所有日志
@@ -1421,7 +1568,7 @@ def api_clear_logs():
     service = data.get('service', 'all')
     
     try:
-        log_dir = '/cv_space/predict/logs'
+        log_dir = str(LOGS_DIR)
         
         log_file_map = {
             'all': ['manager.log', 'realtime_detector.log', 'line_crossing.log'],
@@ -1456,7 +1603,7 @@ def api_clear_logs():
 def api_log_stats():
     """获取日志统计信息"""
     try:
-        log_dir = '/cv_space/predict/logs'
+        log_dir = str(LOGS_DIR)
         stats = {}
         
         log_files = {
@@ -1499,13 +1646,13 @@ if __name__ == '__main__':
     atexit.register(cleanup_on_exit)
     
     # 创建日志目录
-    os.makedirs('/cv_space/predict/logs', exist_ok=True)
+    os.makedirs(str(LOGS_DIR), exist_ok=True)
     
     # 设置管理器日志
     import logging
     from datetime import datetime
     
-    log_file = f'/cv_space/predict/logs/manager.log'
+    log_file = str(LOGS_DIR / 'manager.log')
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s [%(levelname)s] %(message)s',
