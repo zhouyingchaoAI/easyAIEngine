@@ -24,6 +24,8 @@ videos/
 # 备份文件
 *.bak
 *.backup
+* copy*.py
+* copy*.pyc
 
 # 环境变量
 .env
@@ -58,3 +60,13 @@ build.sh
 *_report.md
 GITHUB_*.md
 SSH_*.md
+
+# 临时结果文件
+check_result.json
+fusion_result.json
+*.onnx
+result.mp4
+test.mp4
+
+# 运行输出
+nohup.out
