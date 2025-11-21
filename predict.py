@@ -1,24 +1,15 @@
-# [root@3813ff504d4a code]# atc --model=best.onnx --framework=5 --output=best --soc_version=Ascend310P3
-# ATC start working now, please wait for a moment.
-# ........
-# ATC run success, welcome to the next use.
-
-# [root@3813ff504d4a code]# ls
-
 import os
 import cv2
 import numpy as np
 import acl
-import subprocess
-import time   # 新增：计时
+import time
 
-# 手动定义内存分配类型常量（兼容昇腾acl API变化）
+# 内存分配类型常量
 try:
     MEM_MALLOC_NORMAL_ONLY = acl.rt.MEM_MALLOC_NORMAL_ONLY
 except AttributeError:
     MEM_MALLOC_NORMAL_ONLY = 0
 
-# 内存拷贝方向常量适配（兼容不同ACL版本）
 try:
     MEMCPY_HOST_TO_DEVICE = acl.rt.MEMCPY_HOST_TO_DEVICE
     MEMCPY_DEVICE_TO_HOST = acl.rt.MEMCPY_DEVICE_TO_HOST
@@ -35,8 +26,21 @@ ACL_RESOURCE = {
     'stream': None,
     'model_id': None,
     'model_desc': None,
-    'device_id': 0
+    'device_id': 0,
+    # ===== 优化1: 预分配缓冲区，避免每次推理重复申请/释放内存 =====
+    'input_buffer': None,
+    'output_buffer': None,
+    'input_size': 0,
+    'output_size': 0,
+    'input_dataset': None,
+    'output_dataset': None,
+    'input_data': None,
+    'output_data': None,
+    'output_dims': None,
+    # ===== 优化2: 预分配Host端输出缓冲区 =====
+    'host_output_buffer': None,
 }
+
 
 def init_acl_resource(device_id=0):
     t0 = time.time()
@@ -59,6 +63,7 @@ def init_acl_resource(device_id=0):
     t1 = time.time()
     print(f"ACL资源初始化完成 (Device: {device_id})，耗时: {(t1 - t0)*1000:.2f} ms")
 
+
 def load_om_model(om_path):
     t0 = time.time()
     model_id, ret = acl.mdl.load_from_file(om_path)
@@ -70,13 +75,69 @@ def load_om_model(om_path):
         raise Exception(f"获取模型描述失败, 错误码: {ret}")
     ACL_RESOURCE['model_id'] = model_id
     ACL_RESOURCE['model_desc'] = model_desc
+
+    # ===== 优化1: 模型加载时预分配输入/输出缓冲区 =====
+    input_size = acl.mdl.get_input_size_by_index(model_desc, 0)
+    output_size = acl.mdl.get_output_size_by_index(model_desc, 0)
+
+    input_buffer, ret = acl.rt.malloc(input_size, MEM_MALLOC_NORMAL_ONLY)
+    if ret != 0:
+        raise Exception(f"预分配输入内存失败, 错误码: {ret}")
+    output_buffer, ret = acl.rt.malloc(output_size, MEM_MALLOC_NORMAL_ONLY)
+    if ret != 0:
+        acl.rt.free(input_buffer)
+        raise Exception(f"预分配输出内存失败, 错误码: {ret}")
+
+    # 预创建dataset和data_buffer
+    input_dataset = acl.mdl.create_dataset()
+    input_data = acl.create_data_buffer(input_buffer, input_size)
+    acl.mdl.add_dataset_buffer(input_dataset, input_data)
+
+    output_dataset = acl.mdl.create_dataset()
+    output_data = acl.create_data_buffer(output_buffer, output_size)
+    acl.mdl.add_dataset_buffer(output_dataset, output_data)
+
+    # 预获取输出维度
+    output_dims = acl.mdl.get_output_dims(model_desc, 0)
+    if isinstance(output_dims, dict):
+        dims = output_dims['dims']
+    elif isinstance(output_dims, tuple):
+        if len(output_dims) == 2:
+            dims_info, ret = output_dims
+            if ret != 0:
+                raise Exception(f"获取输出维度失败, 错误码: {ret}")
+            dims = dims_info['dims'] if isinstance(dims_info, dict) else dims_info
+        else:
+            dims = output_dims
+    else:
+        dims = output_dims
+    if hasattr(dims, '__iter__'):
+        dims = list(dims)
+
+    ACL_RESOURCE['input_buffer'] = input_buffer
+    ACL_RESOURCE['output_buffer'] = output_buffer
+    ACL_RESOURCE['input_size'] = input_size
+    ACL_RESOURCE['output_size'] = output_size
+    ACL_RESOURCE['input_dataset'] = input_dataset
+    ACL_RESOURCE['output_dataset'] = output_dataset
+    ACL_RESOURCE['input_data'] = input_data
+    ACL_RESOURCE['output_data'] = output_data
+    ACL_RESOURCE['output_dims'] = dims
+
+    # ===== 优化2: 预分配Host端输出缓冲区 =====
+    import ctypes
+    host_buffer = (ctypes.c_byte * output_size)()
+    ACL_RESOURCE['host_output_buffer'] = host_buffer
+
     input_num = acl.mdl.get_num_inputs(model_desc)
     output_num = acl.mdl.get_num_outputs(model_desc)
     t1 = time.time()
     print(f"OM模型加载成功, Model ID: {model_id}")
     print(f"模型输入数量: {input_num}, 输出数量: {output_num}")
+    print(f"预分配缓冲区: 输入={input_size}B, 输出={output_size}B")
     print(f"加载OM模型耗时: {(t1-t0)*1000:.2f} ms")
     return model_id, model_desc
+
 
 def load_image(image_path):
     t0 = time.time()
@@ -87,16 +148,13 @@ def load_image(image_path):
     print(f"图片读取耗时: {(t1-t0)*1000:.2f} ms")
     return img
 
+
 def nms_fast(boxes, scores, iou_thres):
-    """boxes: [N, 4], scores: [N], both ndarray. Returns keep indices in original order."""
+    """优化后的NMS，使用向量化操作"""
     if len(boxes) == 0:
         return []
-    # Convert to float if not already
     boxes = boxes.astype(np.float32)
-    x1 = boxes[:, 0]
-    y1 = boxes[:, 1]
-    x2 = boxes[:, 2]
-    y2 = boxes[:, 3]
+    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
     areas = (x2 - x1) * (y2 - y1)
     order = scores.argsort()[::-1]
     keep = []
@@ -117,273 +175,25 @@ def nms_fast(boxes, scores, iou_thres):
         order = order[inds + 1]
     return keep
 
-def om_infer(om_path, img_bgr, conf_thres=0.25, iou_thres=0.45, img_size=1024, debug=True):
-    times = {}
-    t_all0 = time.time()
-    # -- 预处理
-    t0 = time.time()
-    orig_h, orig_w = img_bgr.shape[:2]
-    img_in, ratio, (dw, dh) = letterbox(img_bgr, new_shape=(img_size, img_size))
-    img_in = cv2.cvtColor(img_in, cv2.COLOR_BGR2RGB)
-    img_in = img_in.transpose(2, 0, 1)
-    img_in = np.ascontiguousarray(img_in).astype(np.float32) / 255.0
-    img_in = np.expand_dims(img_in, 0)
-    t1 = time.time()
-    times['preprocess_ms'] = (t1 - t0) * 1000
-    if debug:
-        print(f"【阶段耗时】预处理: {times['preprocess_ms']:.2f} ms")
-        print(f"原始图片尺寸: {img_bgr.shape}")
-        print(f"Letterbox后尺寸: {img_in.shape}")
-        print(f"缩放比例: {ratio}")
-        print(f"Padding: dw={dw}, dh={dh}")
 
-    model_id = ACL_RESOURCE['model_id']
-    model_desc = ACL_RESOURCE['model_desc']
+# ===== 优化3: 预编译letterbox的resize参数 =====
+_LETTERBOX_CACHE = {}
 
-    # -- 内存准备阶段
-    t0 = time.time()
-    input_size = acl.mdl.get_input_size_by_index(model_desc, 0)
-    if debug:
-        print(f"模型期望输入大小: {input_size} bytes")
-        print(f"实际数据大小: {img_in.nbytes} bytes")
-    if img_in.nbytes != input_size:
-        print(f"警告: 数据大小不匹配! 期望{input_size}, 实际{img_in.nbytes}")
-    input_buffer, ret = acl.rt.malloc(input_size, MEM_MALLOC_NORMAL_ONLY)
-    if ret != 0:
-        raise Exception(f"申请输入内存失败, 错误码: {ret}")
-    input_bytes = img_in.tobytes()
-    input_ptr = acl.util.bytes_to_ptr(input_bytes)
-    ret = acl.rt.memcpy(input_buffer, input_size, input_ptr, len(input_bytes), MEMCPY_HOST_TO_DEVICE)
-    if ret != 0:
-        acl.rt.free(input_buffer)
-        raise Exception(f"拷贝输入数据失败, 错误码: {ret}")
-    input_dataset = acl.mdl.create_dataset()
-    input_data = acl.create_data_buffer(input_buffer, input_size)
-    ret = acl.mdl.add_dataset_buffer(input_dataset, input_data)
-    if isinstance(ret, tuple):
-        actual_ret = ret[1] if len(ret) > 1 else ret[0]
-        if debug:
-            print(f"add_dataset_buffer返回元组: {ret}, 使用ret_code: {actual_ret}")
-    else:
-        actual_ret = ret
-    if actual_ret != 0 and debug:
-        print(f"警告: 添加输入buffer返回非0值: {actual_ret}")
-    output_size = acl.mdl.get_output_size_by_index(model_desc, 0)
-    if debug:
-        print(f"模型输出大小: {output_size} bytes")
-    output_buffer, ret = acl.rt.malloc(output_size, MEM_MALLOC_NORMAL_ONLY)
-    if ret != 0:
-        acl.rt.free(input_buffer)
-        acl.destroy_data_buffer(input_data)
-        acl.mdl.destroy_dataset(input_dataset)
-        raise Exception(f"申请输出内存失败, 错误码: {ret}")
-    output_dataset = acl.mdl.create_dataset()
-    output_data = acl.create_data_buffer(output_buffer, output_size)
-    ret = acl.mdl.add_dataset_buffer(output_dataset, output_data)
-    if isinstance(ret, tuple):
-        actual_ret = ret[1] if len(ret) > 1 else ret[0]
-        if debug:
-            print(f"add_dataset_buffer返回元组: {ret}, 使用ret_code: {actual_ret}")
-    else:
-        actual_ret = ret
-    if actual_ret != 0 and debug:
-        print(f"警告: 添加输出buffer返回非0值: {actual_ret}")
-    t1 = time.time()
-    times['memcopy_ms'] = (t1 - t0) * 1000
-    if debug:
-        print(f"【阶段耗时】输入内存分配及复制: {times['memcopy_ms']:.2f} ms")
-
-    # -- 推理阶段
-    output_np = None
-    t0 = time.time()
-    if debug:
-        print("开始执行模型推理...")
-    try:
-        ret = acl.mdl.execute(model_id, input_dataset, output_dataset)
-        if ret != 0:
-            raise Exception(f"模型推理失败, 错误码: {ret}")
-        t1 = time.time()
-        times['inference_ms'] = (t1 - t0) * 1000
-        if debug:
-            print("模型推理成功")
-            print(f"【阶段耗时】NPU推理: {times['inference_ms']:.2f} ms")
-        # -- 输出拷贝与解析阶段
-        t0 = time.time()
-        if debug:
-            print("开始获取输出数据...")
-        try:
-            import ctypes
-            host_buffer = (ctypes.c_byte * output_size)()
-            host_ptr = ctypes.cast(host_buffer, ctypes.c_void_p).value
-            ret = acl.rt.memcpy(host_ptr, output_size, output_buffer, output_size, MEMCPY_DEVICE_TO_HOST)
-            if ret != 0:
-                raise Exception(f"拷贝输出数据到Host失败, 错误码: {ret}")
-            if debug:
-                print("成功拷贝输出数据到Host")
-            output_np = np.frombuffer(host_buffer, dtype=np.float32).copy()
-        except Exception as e:
-            if debug:
-                print(f"方案1失败: {e}, 尝试方案2")
-            try:
-                host_ptr, ret = acl.rt.malloc_host(output_size)
-                if ret != 0:
-                    raise Exception(f"分配Host内存失败, 错误码: {ret}")
-                ret = acl.rt.memcpy(host_ptr, output_size, output_buffer, output_size, MEMCPY_DEVICE_TO_HOST)
-                if ret != 0:
-                    acl.rt.free_host(host_ptr)
-                    raise Exception(f"拷贝数据失败, 错误码: {ret}")
-                if debug:
-                    print("方案2: 使用malloc_host成功")
-                output_np = acl.util.ptr_to_numpy(host_ptr, (output_size // 4,), np.float32).copy()
-                acl.rt.free_host(host_ptr)
-            except Exception as e2:
-                if debug:
-                    print(f"方案2失败: {e2}, 尝试方案3")
-                output_ptr = acl.get_data_buffer_addr(output_data)
-                output_np = acl.util.ptr_to_numpy(output_ptr, (output_size // 4,), np.float32).copy()
-        output_dims = acl.mdl.get_output_dims(model_desc, 0)
-        if isinstance(output_dims, dict):
-            dims = output_dims['dims']
-        elif isinstance(output_dims, tuple):
-            if len(output_dims) == 2:
-                dims_info, ret = output_dims
-                if ret != 0:
-                    raise Exception(f"获取输出维度失败, 错误码: {ret}")
-                if isinstance(dims_info, dict):
-                    dims = dims_info['dims']
-                else:
-                    dims = dims_info
-            else:
-                dims = output_dims
-        else:
-            dims = output_dims
-        if debug:
-            print(f"输出维度信息: {dims}")
-        if hasattr(dims, '__iter__'):
-            dims = list(dims)
-        preds = output_np.reshape(dims)
-        t1 = time.time()
-        times['output_ms'] = (t1-t0)*1000
-        if debug:
-            print(f"【阶段耗时】模型输出搬运和reshape: {times['output_ms']:.2f} ms")
-    finally:
-        if debug:
-            print("开始清理ACL资源...")
-        acl.rt.free(input_buffer)
-        acl.rt.free(output_buffer)
-        acl.destroy_data_buffer(input_data)
-        acl.destroy_data_buffer(output_data)
-        acl.mdl.destroy_dataset(input_dataset)
-        acl.mdl.destroy_dataset(output_dataset)
-        if debug:
-            print("ACL资源清理完成")
-    if output_np is None:
-        raise Exception("未能成功获取输出数据")
-    if debug:
-        print(f"OM输出shape: {preds.shape}")
-    if preds.shape[1] < preds.shape[2]:
-        preds = np.transpose(preds, (0, 2, 1))
-    preds = preds[0]
-    num_outputs = preds.shape[1]
-    if num_outputs == 5:
-        is_single_class = True
-        num_classes = 1
-        if debug:
-            print("检测模式: 单类别")
-    else:
-        is_single_class = False
-        num_classes = num_outputs - 4
-        if debug:
-            print(f"检测模式: 多类别 ({num_classes}类)")
-    # -- 后处理 (优化: 使用numpy矢量化和批量NMS)
-    t0 = time.time()
-    # 1. 批量处理所有框和conf
-    if is_single_class:
-        cx = preds[:, 0]
-        cy = preds[:, 1]
-        w = preds[:, 2]
-        h = preds[:, 3]
-        confs = preds[:, 4]
-        cls_ids = np.zeros_like(confs, dtype=np.int32)
-        class_scores = None
-    else:
-        cx = preds[:, 0]
-        cy = preds[:, 1]
-        w = preds[:, 2]
-        h = preds[:, 3]
-        class_scores = preds[:, 4:]
-        cls_ids = np.argmax(class_scores, axis=1)
-        confs = class_scores[np.arange(len(class_scores)), cls_ids]
-    # 筛选置信度
-    mask = confs >= conf_thres
-    if isinstance(ratio, tuple):
-        ratio_w, ratio_h = ratio
-    else:
-        ratio_w = ratio_h = ratio
-    if np.any(mask):
-        cx, cy, w, h, confs, cls_ids = cx[mask], cy[mask], w[mask], h[mask], confs[mask], cls_ids[mask]
-        # x1y1x2y2解码
-        x1 = (cx - w / 2 - dw) / ratio_w
-        y1 = (cy - h / 2 - dh) / ratio_h
-        x2 = (cx + w / 2 - dw) / ratio_w
-        y2 = (cy + h / 2 - dh) / ratio_h
-        x1 = np.clip(x1, 0, orig_w)
-        y1 = np.clip(y1, 0, orig_h)
-        x2 = np.clip(x2, 0, orig_w)
-        y2 = np.clip(y2, 0, orig_h)
-        valid = (x2 > x1) & (y2 > y1)
-        x1, y1, x2, y2, confs, cls_ids = x1[valid], y1[valid], x2[valid], y2[valid], confs[valid], cls_ids[valid]
-        # 构建boxes_for_nms: [N, 4], scores: [N], cls_ids: [N]
-        boxes_for_nms = np.stack((x1, y1, x2, y2), axis=1)
-        scores_for_nms = confs
-        cls_ids_for_nms = cls_ids
-    else:
-        boxes_for_nms = np.zeros((0, 4), dtype=np.float32)
-        scores_for_nms = np.array([], dtype=np.float32)
-        cls_ids_for_nms = np.array([], dtype=np.int32)
-    # 输出置信度统计
-    if debug:
-        all_max_confs = confs if np.any(mask) else np.array([])
-        print(f"\n置信度统计:")
-        if all_max_confs.size > 0:
-            print(f"  - 最大值: {all_max_confs.max():.4f}")
-            print(f"  - 均值: {all_max_confs.mean():.4f}")
-            print(f"  - >0.25的数量: {(all_max_confs > 0.25).sum()}")
-        else:
-            print("  - 无有效置信目标")
-        print(f"置信度过滤后boxes数量: {boxes_for_nms.shape[0]}")
-    boxes_out = []
-    if boxes_for_nms.shape[0] > 0:
-        # 对每个类别做nms
-        unique_classes = np.unique(cls_ids_for_nms)
-        for cls in unique_classes:
-            cls_mask = (cls_ids_for_nms == cls)
-            this_boxes = boxes_for_nms[cls_mask]
-            this_scores = scores_for_nms[cls_mask]
-            this_cls_ids = np.full((this_boxes.shape[0],), cls)
-            keep = nms_fast(this_boxes, this_scores, iou_thres)
-            for i in keep:
-                boxes_out.append([
-                    float(this_boxes[i, 0]), float(this_boxes[i, 1]),
-                    float(this_boxes[i, 2]), float(this_boxes[i, 3]),
-                    float(this_scores[i]), int(cls)
-                ])
-    t1 = time.time()
-    times['postprocess_ms'] = (t1 - t0) * 1000
-    if debug:
-        print(f"【阶段耗时】后处理(NMS等): {times['postprocess_ms']:.2f} ms")
-        print(f"NMS后boxes数量: {len(boxes_out)}")
-        t_all1 = time.time()
-        print(f"【推理流程总耗时】: {(t_all1-t_all0)*1000:.2f} ms")
-        for k, v in times.items():
-            print(f"    > {k}: {v:.2f} ms")
-    return boxes_out
-
-def letterbox(img, new_shape=(640, 640), color=(114, 114, 114), auto=False, 
-              scaleFill=False, scaleup=True, stride=32):
+def letterbox(img, new_shape=(640, 640), color=(114, 114, 114), auto=False, scaleFill=False, scaleup=True, stride=32):
     shape = img.shape[:2]
     if isinstance(new_shape, int):
         new_shape = (new_shape, new_shape)
+    
+    # 使用缓存避免重复计算（对于相同尺寸的图片）
+    cache_key = (shape, new_shape, auto, scaleFill, scaleup, stride)
+    if cache_key in _LETTERBOX_CACHE:
+        cached = _LETTERBOX_CACHE[cache_key]
+        ratio, new_unpad, dw, dh, top, bottom, left, right = cached
+        if shape[::-1] != new_unpad:
+            img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
+        img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
+        return img, ratio, (dw, dh)
+    
     r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
     if not scaleup:
         r = min(r, 1.0)
@@ -398,12 +208,164 @@ def letterbox(img, new_shape=(640, 640), color=(114, 114, 114), auto=False,
         ratio = new_shape[1] / shape[1], new_shape[0] / shape[0]
     dw /= 2
     dh /= 2
-    if shape[::-1] != new_unpad:
-        img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
     top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
     left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
+    
+    # 缓存计算结果
+    _LETTERBOX_CACHE[cache_key] = (ratio, new_unpad, dw, dh, top, bottom, left, right)
+    
+    if shape[::-1] != new_unpad:
+        img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
     img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
     return img, ratio, (dw, dh)
+
+
+def om_infer(om_path, img_bgr, conf_thres=0.25, iou_thres=0.45, img_size=1024, debug=True, return_times=False):
+    times = {}
+    t_all0 = time.time()
+    
+    # -- 预处理 (优化4: 减少内存拷贝)
+    t0 = time.time()
+    orig_h, orig_w = img_bgr.shape[:2]
+    img_in, ratio, (dw, dh) = letterbox(img_bgr, new_shape=(img_size, img_size))
+    
+    # 优化: 合并颜色转换和transpose，减少中间数组创建
+    img_in = cv2.cvtColor(img_in, cv2.COLOR_BGR2RGB)
+    img_in = np.ascontiguousarray(img_in.transpose(2, 0, 1), dtype=np.float32)
+    img_in *= (1.0 / 255.0)  # 原地操作比 /= 255.0 更快
+    img_in = img_in[np.newaxis, ...]  # 比 expand_dims 略快
+    
+    t1 = time.time()
+    times['preprocess_ms'] = (t1 - t0) * 1000
+    if debug:
+        print(f"【阶段耗时】预处理: {times['preprocess_ms']:.2f} ms")
+
+    # 使用预分配的缓冲区
+    model_id = ACL_RESOURCE['model_id']
+    input_buffer = ACL_RESOURCE['input_buffer']
+    output_buffer = ACL_RESOURCE['output_buffer']
+    input_size = ACL_RESOURCE['input_size']
+    output_size = ACL_RESOURCE['output_size']
+    input_dataset = ACL_RESOURCE['input_dataset']
+    output_dataset = ACL_RESOURCE['output_dataset']
+    dims = ACL_RESOURCE['output_dims']
+    host_buffer = ACL_RESOURCE['host_output_buffer']
+
+    # -- 内存拷贝 (优化5: 只做H2D拷贝，无需重新分配)
+    t0 = time.time()
+    input_bytes = img_in.tobytes()
+    input_ptr = acl.util.bytes_to_ptr(input_bytes)
+    ret = acl.rt.memcpy(input_buffer, input_size, input_ptr, len(input_bytes), MEMCPY_HOST_TO_DEVICE)
+    if ret != 0:
+        raise Exception(f"拷贝输入数据失败, 错误码: {ret}")
+    t1 = time.time()
+    times['memcopy_ms'] = (t1 - t0) * 1000
+    if debug:
+        print(f"【阶段耗时】输入内存复制: {times['memcopy_ms']:.2f} ms")
+
+    # -- 推理
+    t0 = time.time()
+    ret = acl.mdl.execute(model_id, input_dataset, output_dataset)
+    if ret != 0:
+        raise Exception(f"模型推理失败, 错误码: {ret}")
+    t1 = time.time()
+    times['inference_ms'] = (t1 - t0) * 1000
+    if debug:
+        print(f"【阶段耗时】NPU推理: {times['inference_ms']:.2f} ms")
+
+    # -- 输出拷贝 (优化6: 使用预分配的host buffer)
+    t0 = time.time()
+    import ctypes
+    host_ptr = ctypes.cast(host_buffer, ctypes.c_void_p).value
+    ret = acl.rt.memcpy(host_ptr, output_size, output_buffer, output_size, MEMCPY_DEVICE_TO_HOST)
+    if ret != 0:
+        raise Exception(f"拷贝输出数据到Host失败, 错误码: {ret}")
+    output_np = np.frombuffer(host_buffer, dtype=np.float32).copy()
+    preds = output_np.reshape(dims)
+    t1 = time.time()
+    times['output_ms'] = (t1 - t0) * 1000
+    if debug:
+        print(f"【阶段耗时】输出搬运和reshape: {times['output_ms']:.2f} ms")
+
+    if debug:
+        print(f"OM输出shape: {preds.shape}")
+    if preds.shape[1] < preds.shape[2]:
+        preds = np.transpose(preds, (0, 2, 1))
+    preds = preds[0]
+    num_outputs = preds.shape[1]
+    is_single_class = (num_outputs == 5)
+    num_classes = 1 if is_single_class else num_outputs - 4
+
+    # -- 后处理 (优化7: 进一步向量化)
+    t0 = time.time()
+    cx, cy, w, h = preds[:, 0], preds[:, 1], preds[:, 2], preds[:, 3]
+    
+    if is_single_class:
+        confs = preds[:, 4]
+        cls_ids = np.zeros(len(confs), dtype=np.int32)
+    else:
+        class_scores = preds[:, 4:]
+        cls_ids = np.argmax(class_scores, axis=1)
+        confs = np.take_along_axis(class_scores, cls_ids[:, None], axis=1).ravel()
+
+    # 置信度筛选
+    mask = confs >= conf_thres
+    
+    if isinstance(ratio, tuple):
+        ratio_w, ratio_h = ratio
+    else:
+        ratio_w = ratio_h = ratio
+
+    boxes_out = []
+    if np.any(mask):
+        cx, cy, w, h = cx[mask], cy[mask], w[mask], h[mask]
+        confs, cls_ids = confs[mask], cls_ids[mask]
+        
+        # 坐标解码
+        half_w, half_h = w * 0.5, h * 0.5
+        x1 = np.clip((cx - half_w - dw) / ratio_w, 0, orig_w)
+        y1 = np.clip((cy - half_h - dh) / ratio_h, 0, orig_h)
+        x2 = np.clip((cx + half_w - dw) / ratio_w, 0, orig_w)
+        y2 = np.clip((cy + half_h - dh) / ratio_h, 0, orig_h)
+        
+        valid = (x2 > x1) & (y2 > y1)
+        if np.any(valid):
+            x1, y1, x2, y2 = x1[valid], y1[valid], x2[valid], y2[valid]
+            confs, cls_ids = confs[valid], cls_ids[valid]
+            
+            boxes_for_nms = np.stack((x1, y1, x2, y2), axis=1)
+            
+            # 按类别NMS
+            unique_classes = np.unique(cls_ids)
+            for cls in unique_classes:
+                cls_mask = (cls_ids == cls)
+                this_boxes = boxes_for_nms[cls_mask]
+                this_scores = confs[cls_mask]
+                keep = nms_fast(this_boxes, this_scores, iou_thres)
+                for i in keep:
+                    boxes_out.append([
+                        float(this_boxes[i, 0]), float(this_boxes[i, 1]),
+                        float(this_boxes[i, 2]), float(this_boxes[i, 3]),
+                        float(this_scores[i]), int(cls)
+                    ])
+
+    t1 = time.time()
+    times['postprocess_ms'] = (t1 - t0) * 1000
+    if debug:
+        print(f"【阶段耗时】后处理(NMS等): {times['postprocess_ms']:.2f} ms")
+        print(f"NMS后boxes数量: {len(boxes_out)}")
+
+    t_all1 = time.time()
+    times['total_ms'] = (t_all1 - t_all0) * 1000
+    print(f"【推理流程总耗时】: {times['total_ms']:.2f} ms")
+    for k, v in times.items():
+        if k != 'total_ms':
+            print(f"  > {k}: {v:.2f} ms")
+
+    if return_times:
+        return boxes_out, times
+    return boxes_out
+
 
 def save_result(img_bgr, boxes_out, out_img_path, class_names=None):
     t0 = time.time()
@@ -424,8 +386,22 @@ def save_result(img_bgr, boxes_out, out_img_path, class_names=None):
     t1 = time.time()
     print(f"检测到 {len(boxes_out)} 个目标，结果保存耗时: {(t1-t0)*1000:.2f} ms")
 
+
 def release_acl_resource():
     t0 = time.time()
+    # 释放预分配的缓冲区
+    if ACL_RESOURCE['input_buffer'] is not None:
+        acl.rt.free(ACL_RESOURCE['input_buffer'])
+    if ACL_RESOURCE['output_buffer'] is not None:
+        acl.rt.free(ACL_RESOURCE['output_buffer'])
+    if ACL_RESOURCE['input_data'] is not None:
+        acl.destroy_data_buffer(ACL_RESOURCE['input_data'])
+    if ACL_RESOURCE['output_data'] is not None:
+        acl.destroy_data_buffer(ACL_RESOURCE['output_data'])
+    if ACL_RESOURCE['input_dataset'] is not None:
+        acl.mdl.destroy_dataset(ACL_RESOURCE['input_dataset'])
+    if ACL_RESOURCE['output_dataset'] is not None:
+        acl.mdl.destroy_dataset(ACL_RESOURCE['output_dataset'])
     if ACL_RESOURCE['model_id'] is not None:
         acl.mdl.unload(ACL_RESOURCE['model_id'])
     if ACL_RESOURCE['model_desc'] is not None:
@@ -439,20 +415,20 @@ def release_acl_resource():
     t1 = time.time()
     print(f"ACL资源已释放，资源释放耗时: {(t1-t0)*1000:.2f} ms")
 
+
 if __name__ == "__main__":
-    YOLO_CKPT = "/cv_space/NWPU-Crowd/runs/exp_yolo11x3/weights/best.pt"
     IMAGE_PATH = "7000.jpg"
     OUTPUT_IMAGE = "result_om1.jpg"
-    DEVICE_ID = 0  # 昇腾设备ID
+    DEVICE_ID = 0
     om_path = "weight/best.om"
-    
+
     try:
         t0 = time.time()
         print("========== 初始化ACL资源 ==========")
         init_acl_resource(device_id=DEVICE_ID)
         t1 = time.time()
         print(f"总耗时 - 初始化ACL资源: {(t1-t0)*1000:.2f} ms\n")
-        
+
         t0 = time.time()
         print("========== 加载OM模型 ==========")
         load_om_model(om_path)
@@ -464,26 +440,35 @@ if __name__ == "__main__":
         t1 = time.time()
         print(f"\n图片尺寸: {img_bgr.shape}")
         print(f"总耗时 - 读取图片: {(t1-t0)*1000:.2f} ms\n")
-        
+
         t0 = time.time()
         print("========== OM推理 (昇腾310) ==========")
         boxes = om_infer(
-            om_path, 
-            img_bgr, 
+            om_path,
+            img_bgr,
             conf_thres=0.08,
             iou_thres=0.35,
             debug=True
         )
         t1 = time.time()
         print(f"总耗时 - OM推理: {(t1-t0)*1000:.2f} ms\n")
-        
+
+        # ===== 多次推理测试（验证预分配缓冲区效果）=====
+        print("\n========== 连续推理测试 ==========")
+        for i in range(3):
+            t0 = time.time()
+            boxes = om_infer(om_path, img_bgr, conf_thres=0.08, iou_thres=0.35, debug=False)
+            t1 = time.time()
+            print(f"第{i+1}次推理耗时: {(t1-t0)*1000:.2f} ms, 检测框: {len(boxes)}")
+
         t0 = time.time()
         save_result(img_bgr, boxes, OUTPUT_IMAGE)
         t1 = time.time()
         print(f"总耗时 - 绘制保存: {(t1-t0)*1000:.2f} ms\n")
+
         print(f"\n结果已保存至: {OUTPUT_IMAGE}")
         print(f"检测框数量: OM={len(boxes)}")
-        
+
     except Exception as e:
         print(f"\n错误: {e}")
         import traceback

@@ -44,7 +44,7 @@ CONFIG = {
     'host': '172.16.5.207',
     'easydarwin_url': '127.0.0.1:5066',
     'heartbeat_interval': 30,
-    'log_dir': './logs',  # 默认使用相对路径，可通过命令行参数覆盖
+    'log_dir': '/cv_space/predict/logs',
     'log_file': 'realtime_detector.log',
 }
 
@@ -96,9 +96,7 @@ def load_algo_config(image_url):
                 
                 # 保存配置文件到本地
                 try:
-                    # 使用相对于工作目录的configs目录
-                    # 在打包后的环境中，使用当前工作目录
-                    config_dir = Path("configs").resolve()
+                    config_dir = Path("/cv_space/predict/configs")
                     config_dir.mkdir(parents=True, exist_ok=True)
                     
                     task_id = config.get('task_id', 'unknown')
@@ -1400,28 +1398,15 @@ def main():
                         help='主机IP地址 (用于注册到EasyDarwin，默认自动检测)')
     parser.add_argument('--no-register', action='store_true',
                         help='不注册到EasyDarwin')
-    parser.add_argument('--log-dir', default='./logs',
-                        help='日志目录 (默认: ./logs，相对于工作目录)')
+    parser.add_argument('--log-dir', default='/code/predict/logs',
+                        help='日志目录 (默认: /code/predict/logs)')
     parser.add_argument('--log-file', default='realtime_detector.log',
                         help='日志文件名 (默认: realtime_detector.log)')
     
     args = parser.parse_args()
 
-    # 处理相对路径：如果log_dir是相对路径，转换为绝对路径（相对于工作目录）
-    log_dir = args.log_dir
-    if not os.path.isabs(log_dir):
-        log_dir = os.path.abspath(log_dir)
-    
-    CONFIG['log_dir'] = log_dir
+    CONFIG['log_dir'] = args.log_dir
     CONFIG['log_file'] = args.log_file
-    
-    # 更新模型路径（如果提供了参数）
-    if args.model:
-        if not os.path.isabs(args.model):
-            CONFIG['model_path'] = os.path.abspath(args.model)
-        else:
-            CONFIG['model_path'] = args.model
-    
     setup_logging(CONFIG['log_dir'], CONFIG['log_file'])
     
     # Ascend 设备信息
@@ -1439,7 +1424,7 @@ def main():
     # 规范化 EasyDarwin 基地址，确保包含协议前缀
     if not (CONFIG['easydarwin_url'].startswith('http://') or CONFIG['easydarwin_url'].startswith('https://')):
         CONFIG['easydarwin_url'] = f"http://{CONFIG['easydarwin_url']}"
-    # 模型路径已在上面处理，这里不再重复设置
+    CONFIG['model_path'] = args.model
     
     # 注册信号处理器
     signal.signal(signal.SIGINT, signal_handler)

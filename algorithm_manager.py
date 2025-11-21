@@ -67,11 +67,31 @@ SERVICES = {
             'batch_timeout': 0.1,
         },
         'instances': []
+    },
+    'line_crossing': {
+        'name': '绊线统计算法服务',
+        'script': 'algorithm_service_line_crossing.py',
+        'default_config': {
+            'device_id': '0',  # Ascend NPU设备ID
+            'batch_size': 8,
+            'batch_timeout': 0.1,
+        },
+        'instances': []
     }
 }
 
 # 存储每个实例的历史统计信息，用于计算每秒请求数
 INSTANCE_HISTORY = {}  # {pid: {'last_total_requests': 0, 'last_timestamp': time.time()}}
+
+# 存储历史统计数据，用于绘制曲线图
+# 格式: {service_key: {'timestamps': [], 'requests_per_sec': [], 'responses_per_sec': []}}
+HISTORY_DATA = {
+    'realtime': {'timestamps': [], 'requests_per_sec': [], 'responses_per_sec': []},
+    'line_crossing': {'timestamps': [], 'requests_per_sec': [], 'responses_per_sec': []}
+}
+# 保留历史数据的时间范围（秒），设置为24小时，0表示不限制
+HISTORY_RETENTION_HOURS = 48  # 保留24小时的历史数据
+HISTORY_RETENTION_SECONDS = HISTORY_RETENTION_HOURS * 3600 if HISTORY_RETENTION_HOURS > 0 else 0
 
 # HTML模板
 HTML_TEMPLATE = '''
@@ -81,6 +101,7 @@ HTML_TEMPLATE = '''
     <title>算法服务管理器</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -405,6 +426,73 @@ HTML_TEMPLATE = '''
             animation: spin 1s linear infinite;
             display: inline-block;
         }
+        .chart-container {
+            background: white;
+            border-radius: 10px;
+            padding: 16px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            margin-bottom: 12px;
+        }
+        .chart-wrapper {
+            position: relative;
+            height: 300px;
+            margin-top: 12px;
+        }
+        .stats-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+            color: white;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .stats-card h3 {
+            margin: 0 0 12px 0;
+            font-size: 14px;
+            font-weight: 600;
+            opacity: 0.9;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        .stat-item {
+            text-align: center;
+        }
+        .stat-label {
+            font-size: 11px;
+            opacity: 0.8;
+            margin-bottom: 6px;
+            font-weight: 500;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+        }
+        .service-card {
+            background: white;
+            border-radius: 10px;
+            padding: 16px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            margin-bottom: 12px;
+        }
+        .service-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+        .service-card-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: #2d3748;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
     </style>
 </head>
 <body>
@@ -426,10 +514,12 @@ HTML_TEMPLATE = '''
             </div>
 
             <!-- 服务管理（仅实时检测） -->
-            <div class="card">
-                <div class="card-title">
-                    🔴 实时检测服务
-                    <span id="realtime-status" class="status-badge status-stopped">已停止</span>
+            <div class="service-card">
+                <div class="service-card-header">
+                    <div class="service-card-title">
+                        🔴 实时检测服务
+                        <span id="realtime-status" class="status-badge status-stopped">已停止</span>
+                    </div>
                 </div>
                 
                 <div class="service-info">
@@ -444,17 +534,29 @@ HTML_TEMPLATE = '''
                     </div>
                 </div>
 
-                <!-- 总计统计 -->
-                <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:12px;margin-bottom:12px;">
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-                        <div style="text-align:center;">
-                            <div style="font-size:11px;color:#0369a1;margin-bottom:4px;font-weight:500;">📥 总每秒请求数</div>
-                            <div id="realtime-total-requests-per-sec" style="font-size:20px;font-weight:700;color:#0284c7;">0.00 req/s</div>
+                        <!-- 总计统计和图表 -->
+                <div class="stats-card">
+                    <h3>📊 实时统计</h3>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-label">📥 总每秒请求数</div>
+                            <div class="stat-value" id="realtime-total-requests-per-sec">0.00</div>
                         </div>
-                        <div style="text-align:center;">
-                            <div style="font-size:11px;color:#0369a1;margin-bottom:4px;font-weight:500;">📤 总每秒返回数</div>
-                            <div id="realtime-total-responses-per-sec" style="font-size:20px;font-weight:700;color:#0284c7;">0.00 res/s</div>
+                        <div class="stat-item">
+                            <div class="stat-label">📤 总每秒返回数</div>
+                            <div class="stat-value" id="realtime-total-responses-per-sec">0.00</div>
                         </div>
+                    </div>
+                </div>
+                
+                <!-- 曲线图 -->
+                <div class="chart-container">
+                    <div class="card-title">
+                        <span>📈 请求/返回速率趋势图</span>
+                        <span id="realtime-chart-info" style="font-size:11px;color:#718096;font-weight:normal;"></span>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="realtime-chart"></canvas>
                     </div>
                 </div>
 
@@ -501,6 +603,102 @@ HTML_TEMPLATE = '''
             </div>
         </div>
 
+        <!-- 绊线统计算法服务 -->
+        <div class="service-card">
+            <div class="service-card-header">
+                <div class="service-card-title">
+                    🟢 绊线统计算法服务
+                    <span id="line_crossing-status" class="status-badge status-stopped">已停止</span>
+                </div>
+            </div>
+            
+            <div class="service-info">
+                <div class="service-info-item">
+                    <span>任务类型</span>
+                    <strong>绊线人数统计</strong>
+                </div>
+                <div class="service-info-item">
+                    <span>设备</span>
+                    <strong>Ascend NPU（可多实例分配至不同 device_id）</strong>
+                </div>
+            </div>
+
+            <!-- 总计统计和图表 -->
+            <div class="stats-card" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%);">
+                <h3>📊 实时统计</h3>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">📥 总每秒请求数</div>
+                        <div class="stat-value" id="line_crossing-total-requests-per-sec">0.00</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">📤 总每秒返回数</div>
+                        <div class="stat-value" id="line_crossing-total-responses-per-sec">0.00</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 曲线图 -->
+            <div class="chart-container">
+                <div class="card-title">
+                    <span>📈 请求/返回速率趋势图</span>
+                    <span id="line_crossing-chart-info" style="font-size:11px;color:#718096;font-weight:normal;"></span>
+                </div>
+                <div class="chart-wrapper">
+                    <canvas id="line_crossing-chart"></canvas>
+                </div>
+            </div>
+
+            <div class="form-grid">
+                <div class="form-group full-width">
+                    <label>服务ID前缀（批量实例自动递增）</label>
+                    <input type="text" id="line_crossing-service-prefix-input" value="yolo11x_line_crossing" placeholder="例如: yolo11x_line_crossing">
+                </div>
+                <div class="form-group">
+                    <label>实例数量</label>
+                    <input type="number" id="line_crossing-count-input" value="1" min="1" placeholder="要启动的实例个数">
+                </div>
+                <div class="form-group">
+                    <label>设备列表（device_id）</label>
+                    <input type="text" id="line_crossing-devices-input" value="0" placeholder="例如: 0,1,0">
+                </div>
+                <div class="form-group">
+                    <label>批处理大小</label>
+                    <input type="number" id="line_crossing-batch-input" value="8">
+                </div>
+                <div class="form-group">
+                    <label>批处理超时（秒）</label>
+                    <input type="number" id="line_crossing-batch-timeout-input" value="0.1" step="0.1" min="0.1">
+                </div>
+                <div class="form-group">
+                    <label>端口（0=自动分配 7901-7999）</label>
+                    <input type="number" id="line_crossing-port-input" value="0" placeholder="0=自动分配">
+                </div>
+                <div class="form-group">
+                    <label>推理端点IP</label>
+                    <input type="text" id="line_crossing-infer-ip-input" value="127.0.0.1" placeholder="例如: 127.0.0.1">
+                </div>
+                <div class="form-group">
+                    <label>模型路径（可选，默认使用./weight/best.om）</label>
+                    <input type="text" id="line_crossing-model-input" value="" placeholder="留空使用默认模型 ./weight/best.om">
+                </div>
+                <div class="form-group full-width">
+                    <label>EasyDarwin地址</label>
+                    <input type="text" id="line_crossing-easydarwin-input" value="127.0.0.1:5066" placeholder="例如: 127.0.0.1:5066 或 http://127.0.0.1:5066">
+                </div>
+            </div>
+            
+            <div class="btn-group">
+                <button class="btn btn-success" onclick="startService('line_crossing')">▶️ 批量新增实例</button>
+                <button class="btn btn-danger" onclick="stopService('line_crossing')">⏹️ 停止全部实例</button>
+            </div>
+
+            <div style="margin-top:12px;padding-top:12px;border-top:1px solid #e2e8f0;">
+                <div class="card-title" style="border:none;padding:0;margin:0 0 8px 0;font-size:14px;">📋 实例列表</div>
+                <div id="line_crossing-instances" class="instances-grid">暂无实例</div>
+            </div>
+        </div>
+
         <!-- 系统日志 -->
         <div class="card">
             <div class="card-title">
@@ -532,21 +730,174 @@ HTML_TEMPLATE = '''
         // 自动刷新间隔（毫秒）
         const REFRESH_INTERVAL = 3000;
         let autoRefresh = true;
+        
+        // 图表对象
+        const charts = {
+            realtime: null,
+            line_crossing: null
+        };
+
+        // 初始化图表
+        function initChart(serviceKey) {
+            const canvasId = `${serviceKey}-chart`;
+            const ctx = document.getElementById(canvasId);
+            if (!ctx) return;
+            
+            charts[serviceKey] = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: '每秒请求数 (req/s)',
+                            data: [],
+                            borderColor: 'rgb(66, 153, 225)',
+                            backgroundColor: 'rgba(66, 153, 225, 0.1)',
+                            tension: 0.4,
+                            fill: true
+                        },
+                        {
+                            label: '每秒返回数 (res/s)',
+                            data: [],
+                            borderColor: 'rgb(72, 187, 120)',
+                            backgroundColor: 'rgba(72, 187, 120, 0.1)',
+                            tension: 0.4,
+                            fill: true
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                            labels: {
+                                usePointStyle: true,
+                                padding: 15,
+                                font: {
+                                    size: 12
+                                }
+                            }
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: '时间'
+                            },
+                            ticks: {
+                                maxRotation: 45,
+                                minRotation: 0,
+                                autoSkip: true,
+                                maxTicksLimit: 50
+                            }
+                        },
+                        y: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: '速率 (req/s)'
+                            },
+                            beginAtZero: true
+                        }
+                    },
+                    interaction: {
+                        mode: 'nearest',
+                        axis: 'x',
+                        intersect: false
+                    }
+                }
+            });
+        }
+
+        // 更新图表数据
+        function updateChart(serviceKey, historyData) {
+            if (!charts[serviceKey] || !historyData) return;
+            
+            const chart = charts[serviceKey];
+            const timestamps = historyData.timestamps || [];
+            const requests = historyData.requests_per_sec || [];
+            const responses = historyData.responses_per_sec || [];
+            
+            // 更新图表信息显示
+            const infoEl = document.getElementById(`${serviceKey}-chart-info`);
+            if (infoEl && timestamps.length > 0) {
+                const firstTime = new Date(timestamps[0] * 1000);
+                const lastTime = new Date(timestamps[timestamps.length - 1] * 1000);
+                const duration = Math.round((timestamps[timestamps.length - 1] - timestamps[0]) / 60); // 分钟
+                infoEl.textContent = `(${timestamps.length}个数据点，跨度约${duration}分钟)`;
+            }
+            
+            // 格式化时间标签（只显示时分秒）
+            // 当数据点很多时，只显示部分标签以提高性能
+            const maxLabels = 50; // 最多显示50个时间标签
+            const labelStep = Math.max(1, Math.floor(timestamps.length / maxLabels));
+            
+            const labels = timestamps.map((ts, index) => {
+                // 只对部分索引显示标签，其他显示空字符串
+                if (index % labelStep === 0 || index === timestamps.length - 1) {
+                    const date = new Date(ts * 1000);
+                    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                }
+                return '';
+            });
+            
+            chart.data.labels = labels;
+            chart.data.datasets[0].data = requests;
+            chart.data.datasets[1].data = responses;
+            
+            // 优化图表配置以处理大量数据
+            chart.options.scales.x.ticks.maxTicksLimit = maxLabels;
+            chart.options.scales.x.ticks.autoSkip = true;
+            chart.options.scales.x.ticks.maxRotation = timestamps.length > 20 ? 45 : 0;
+            
+            chart.update('none'); // 'none' 模式避免动画，提高性能
+        }
 
         // 页面加载时初始化
         window.onload = function() {
+            // 初始化图表
+            initChart('realtime');
+            initChart('line_crossing');
+            
             loadGPUInfo();
             loadServiceStatus();
             loadLogs();
+            loadHistoryData();
             
             // 自动刷新
             setInterval(() => {
                 if (autoRefresh) {
                     loadGPUInfo();
                     loadServiceStatus();
+                    loadHistoryData();
                 }
             }, REFRESH_INTERVAL);
         };
+        
+        // 加载历史数据
+        async function loadHistoryData() {
+            try {
+                const response = await fetch('/api/history-data');
+                const data = await response.json();
+                
+                Object.keys(data).forEach(serviceKey => {
+                    if (charts[serviceKey]) {
+                        updateChart(serviceKey, data[serviceKey]);
+                    }
+                });
+            } catch (error) {
+                console.error('加载历史数据失败:', error);
+            }
+        }
 
         // 加载GPU信息
         async function loadGPUInfo() {
@@ -705,10 +1056,10 @@ HTML_TEMPLATE = '''
                     const totalRequestsEl = document.getElementById(`${serviceKey}-total-requests-per-sec`);
                     const totalResponsesEl = document.getElementById(`${serviceKey}-total-responses-per-sec`);
                     if (totalRequestsEl) {
-                        totalRequestsEl.textContent = `${totalRequestsPerSec.toFixed(2)} req/s`;
+                        totalRequestsEl.textContent = totalRequestsPerSec.toFixed(2);
                     }
                     if (totalResponsesEl) {
-                        totalResponsesEl.textContent = `${totalResponsesPerSec.toFixed(2)} res/s`;
+                        totalResponsesEl.textContent = totalResponsesPerSec.toFixed(2);
                     }
                 });
             } catch (error) {
@@ -722,24 +1073,39 @@ HTML_TEMPLATE = '''
             const devices = document.getElementById(`${serviceKey}-devices-input`).value;
             const port = document.getElementById(`${serviceKey}-port-input`).value;
             const batchSize = document.getElementById(`${serviceKey}-batch-input`).value;
-            const inferIp = document.getElementById(`${serviceKey}-infer-ip-input`).value || '127.0.0.1';
+            const inferIp = document.getElementById(`${serviceKey}-infer-ip-input`) ? document.getElementById(`${serviceKey}-infer-ip-input`).value || '127.0.0.1' : '127.0.0.1';
             const easydarwinUrl = document.getElementById(`${serviceKey}-easydarwin-input`).value || '127.0.0.1:5066';
-            const servicePrefix = document.getElementById(`${serviceKey}-service-prefix-input`).value || 'yolo11x_head_detector';
+            const servicePrefix = document.getElementById(`${serviceKey}-service-prefix-input`).value || (serviceKey === 'line_crossing' ? 'yolo11x_line_crossing' : 'yolo11x_head_detector');
+            
+            // 构建请求体
+            const requestBody = {
+                service: serviceKey,
+                count: count,
+                device_ids: devices,
+                port: parseInt(port),
+                batch_size: parseInt(batchSize),
+                easydarwin_url: easydarwinUrl,
+                service_id_prefix: servicePrefix
+            };
+            
+            // 绊线算法需要额外参数
+            if (serviceKey === 'line_crossing') {
+                const batchTimeout = document.getElementById(`${serviceKey}-batch-timeout-input`).value || '0.1';
+                const model = document.getElementById(`${serviceKey}-model-input`).value;
+                requestBody.batch_timeout = parseFloat(batchTimeout);
+                requestBody.infer_ip = inferIp;  // 绊线算法也需要推理端点IP
+                if (model) {
+                    requestBody.model = model;
+                }
+            } else {
+                requestBody.infer_ip = inferIp;
+            }
             
             try {
                 const response = await fetch('/api/start-service', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        service: serviceKey,
-                        count: count,
-                        device_ids: devices,
-                        port: parseInt(port),
-                        batch_size: parseInt(batchSize),
-                        infer_ip: inferIp,
-                        easydarwin_url: easydarwinUrl,
-                        service_id_prefix: servicePrefix
-                    })
+                    body: JSON.stringify(requestBody)
                 });
                 
                 const data = await response.json();
@@ -1186,7 +1552,7 @@ def api_gpu_debug():
 @app.route('/api/services')
 def api_services():
     """获取服务状态API（多实例）"""
-    global INSTANCE_HISTORY
+    global INSTANCE_HISTORY, HISTORY_DATA
     result = {}
     current_time = time.time()
     
@@ -1271,6 +1637,29 @@ def api_services():
         # 覆盖为存活实例
         service['instances'] = alive_instances
         
+        # 记录历史数据
+        if key in HISTORY_DATA:
+            history = HISTORY_DATA[key]
+            history['timestamps'].append(current_time)
+            history['requests_per_sec'].append(total_requests_per_second)
+            history['responses_per_sec'].append(total_responses_per_second)
+            
+            # 基于时间范围清理旧数据（如果设置了保留时间）
+            if HISTORY_RETENTION_SECONDS > 0:
+                cutoff_time = current_time - HISTORY_RETENTION_SECONDS
+                # 找到第一个大于cutoff_time的时间戳索引
+                keep_from_index = 0
+                for i, ts in enumerate(history['timestamps']):
+                    if ts > cutoff_time:
+                        keep_from_index = i
+                        break
+                
+                # 如果找到了需要清理的数据，则保留从keep_from_index开始的数据
+                if keep_from_index > 0:
+                    history['timestamps'] = history['timestamps'][keep_from_index:]
+                    history['requests_per_sec'] = history['requests_per_sec'][keep_from_index:]
+                    history['responses_per_sec'] = history['responses_per_sec'][keep_from_index:]
+        
         result[key] = {
             'name': service['name'],
             'instances': instances_out,
@@ -1290,9 +1679,11 @@ def api_start_service():
     devices_raw = data.get('device_ids', '0')
     port = data.get('port', 0)
     batch_size = data.get('batch_size', 8)
+    batch_timeout = data.get('batch_timeout', 0.1)  # 批处理超时
     infer_ip = data.get('infer_ip', '127.0.0.1')  # 推理端点IP，默认为127.0.0.1
     easydarwin_url = data.get('easydarwin_url', '127.0.0.1:5066')  # EasyDarwin地址，默认为127.0.0.1:5066
     service_id_prefix = data.get('service_id_prefix', 'yolo11x_head_detector')
+    model_path = data.get('model', None)  # 模型路径（绊线算法需要）
     
     if service_key not in SERVICES:
         return jsonify({'success': False, 'message': '未知服务'})
@@ -1368,46 +1759,91 @@ def api_start_service():
             # 选择设备（循环分配）
             device_id = device_ids[i % len(device_ids)]
 
-            # 构建启动命令（Ascend: 通过 --device-id 传入）
-            # 使用相对路径，确保在打包后也能正确工作
-            model_path = str(WEIGHT_DIR / 'best.om')
-            
-            # 检测是否在打包后的环境中
-            service_exe = get_service_executable(service['script'])
-            if service_exe and service_exe != 'python3':
-                # 打包后的环境，直接使用可执行文件
-                cmd = [
-                    service_exe,
-                    '--service-id', f"{service_id_prefix}_{inst_port}",
-                    '--port', str(inst_port),
-                    '--device-id', str(device_id),
-                    '--easydarwin', easydarwin_url,
-                    '--host-ip', infer_ip,  # 传递推理端点IP给服务，用于注册到EasyDarwin
-                    '--model', model_path,  # 模型路径
-                    '--log-dir', str(LOGS_DIR)  # 日志目录
-                ]
+            # 根据服务类型构建不同的启动命令
+            if service_key == 'line_crossing':
+                # 绊线算法使用NPU（与人数统计算法相同）
+                if model_path is None or model_path == '':
+                    model_path = str(WEIGHT_DIR / 'best.om')  # 使用与人数统计算法相同的模型
+                
+                # 检测是否在打包后的环境中
+                service_exe = get_service_executable(service['script'])
+                if service_exe and service_exe != 'python3':
+                    # 打包后的环境，直接使用可执行文件
+                    cmd = [
+                        service_exe,
+                        '--service-id', f"{service_id_prefix}_{inst_port}",
+                        '--port', str(inst_port),
+                        '--device-id', str(device_id),  # Ascend NPU设备ID
+                        '--easydarwin', easydarwin_url,
+                        '--host-ip', infer_ip,  # 传递推理端点IP给服务，用于注册到EasyDarwin
+                        '--model', model_path,  # 模型路径
+                        '--batch-size', str(batch_size),
+                        '--batch-timeout', str(batch_timeout),
+                        '--log-dir', str(LOGS_DIR)  # 日志目录
+                    ]
+                else:
+                    # 开发环境，使用Python运行脚本
+                    script_path = str(BASE_DIR / service['script'])
+                    cmd = [
+                        'python3',
+                        script_path,
+                        '--service-id', f"{service_id_prefix}_{inst_port}",
+                        '--port', str(inst_port),
+                        '--device-id', str(device_id),  # Ascend NPU设备ID
+                        '--easydarwin', easydarwin_url,
+                        '--host-ip', infer_ip,  # 传递推理端点IP给服务，用于注册到EasyDarwin
+                        '--model', model_path,  # 模型路径
+                        '--batch-size', str(batch_size),
+                        '--batch-timeout', str(batch_timeout),
+                        '--log-dir', str(LOGS_DIR)  # 日志目录
+                    ]
             else:
-                # 开发环境，使用Python运行脚本
-                script_path = str(BASE_DIR / service['script'])
-                cmd = [
-                    'python3',
-                    script_path,
-                    '--service-id', f"{service_id_prefix}_{inst_port}",
-                    '--port', str(inst_port),
-                    '--device-id', str(device_id),
-                    '--easydarwin', easydarwin_url,
-                    '--host-ip', infer_ip,  # 传递推理端点IP给服务，用于注册到EasyDarwin
-                    '--model', model_path,  # 模型路径
-                    '--log-dir', str(LOGS_DIR)  # 日志目录
-                ]
+                # 实时检测服务使用NPU
+                # 使用相对路径，确保在打包后也能正确工作
+                if model_path is None:
+                    model_path = str(WEIGHT_DIR / 'best.om')
+                
+                # 检测是否在打包后的环境中
+                service_exe = get_service_executable(service['script'])
+                if service_exe and service_exe != 'python3':
+                    # 打包后的环境，直接使用可执行文件
+                    cmd = [
+                        service_exe,
+                        '--service-id', f"{service_id_prefix}_{inst_port}",
+                        '--port', str(inst_port),
+                        '--device-id', str(device_id),
+                        '--easydarwin', easydarwin_url,
+                        '--host-ip', infer_ip,  # 传递推理端点IP给服务，用于注册到EasyDarwin
+                        '--model', model_path,  # 模型路径
+                        '--log-dir', str(LOGS_DIR)  # 日志目录
+                    ]
+                else:
+                    # 开发环境，使用Python运行脚本
+                    script_path = str(BASE_DIR / service['script'])
+                    cmd = [
+                        'python3',
+                        script_path,
+                        '--service-id', f"{service_id_prefix}_{inst_port}",
+                        '--port', str(inst_port),
+                        '--device-id', str(device_id),
+                        '--easydarwin', easydarwin_url,
+                        '--host-ip', infer_ip,  # 传递推理端点IP给服务，用于注册到EasyDarwin
+                        '--model', model_path,  # 模型路径
+                        '--log-dir', str(LOGS_DIR)  # 日志目录
+                    ]
 
             # 记录日志标记
             log_handle.write(f"\n{'='*60}\n")
             log_handle.write(f"服务启动: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            log_handle.write(f"DEVICE: {device_id}, 端口: {inst_port}, 批处理: {batch_size}\n")
+            if service_key == 'line_crossing':
+                log_handle.write(f"DEVICE: {device_id}, 端口: {inst_port}, 批处理: {batch_size}, 超时: {batch_timeout}\n")
+                log_handle.write(f"模型路径: {model_path}\n")
+                log_handle.write(f"推理端点IP: {infer_ip} (用于注册到EasyDarwin)\n")
+            else:
+                log_handle.write(f"DEVICE: {device_id}, 端口: {inst_port}, 批处理: {batch_size}\n")
+                log_handle.write(f"推理端点IP: {infer_ip} (用于注册到EasyDarwin)\n")
             log_handle.write(f"服务ID: {service_id_prefix}_{inst_port}\n")
             log_handle.write(f"EasyDarwin地址: {easydarwin_url}\n")
-            log_handle.write(f"推理端点IP: {infer_ip} (用于注册到EasyDarwin)\n")
             log_handle.write(f"{'='*60}\n")
             log_handle.flush()
 
@@ -1422,20 +1858,26 @@ def api_start_service():
             time.sleep(0.5)
             if process.poll() is None:
                 service_id = f"{service_id_prefix}_{inst_port}"
+                instance_config = {
+                    'device_id': device_id,  # 对于绊线算法，这里实际是gpu_id
+                    'port': inst_port,
+                    'batch_size': batch_size,
+                    'service_id': service_id,
+                    'infer_ip': infer_ip  # 所有服务都保存推理端点IP
+                }
+                if service_key == 'line_crossing':
+                    instance_config['batch_timeout'] = batch_timeout
+                    if model_path:
+                        instance_config['model_path'] = model_path
+                
                 instance = {
                     'process': process,
                     'pid': process.pid,
-                    'config': {
-                        'device_id': device_id,
-                        'port': inst_port,
-                        'batch_size': batch_size,
-                        'infer_ip': infer_ip,  # 保存推理端点IP
-                        'service_id': service_id  # 保存服务ID
-                    },
+                    'config': instance_config,
                     'stats': None
                 }
                 service.setdefault('instances', []).append(instance)
-                started.append({'pid': process.pid, 'port': inst_port, 'device_id': device_id, 'infer_ip': infer_ip, 'service_id': service_id})
+                started.append({'pid': process.pid, 'port': inst_port, 'device_id': device_id, 'service_id': service_id})
 
         if not started:
             return jsonify({'success': False, 'message': '实例启动失败'}), 500
@@ -1629,6 +2071,24 @@ def api_log_stats():
                 stats[key] = {'exists': False}
         
         return jsonify(stats)
+    except Exception as e:
+        return jsonify({'error': str(e)})
+
+
+@app.route('/api/history-data')
+def api_history_data():
+    """获取历史统计数据API"""
+    global HISTORY_DATA
+    try:
+        # 返回所有服务的历史数据
+        result = {}
+        for key, history in HISTORY_DATA.items():
+            result[key] = {
+                'timestamps': history['timestamps'].copy(),
+                'requests_per_sec': history['requests_per_sec'].copy(),
+                'responses_per_sec': history['responses_per_sec'].copy()
+            }
+        return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)})
 
