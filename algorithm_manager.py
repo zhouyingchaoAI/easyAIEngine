@@ -680,11 +680,26 @@ HTML_TEMPLATE = '''
                 </div>
                 <div class="form-group">
                     <label>模型路径（可选，默认使用./weight/best.om）</label>
-                    <input type="text" id="line_crossing-model-input" value="" placeholder="留空使用默认模型 ./weight/best.om">
+                    <input type="text" id="line_crossing-model-input" value="" placeholder="留空使用默认OM模型 ./weight/best.om">
                 </div>
                 <div class="form-group full-width">
                     <label>EasyDarwin地址</label>
                     <input type="text" id="line_crossing-easydarwin-input" value="127.0.0.1:5066" placeholder="例如: 127.0.0.1:5066 或 http://127.0.0.1:5066">
+                </div>
+                <div class="form-group full-width" style="border-top: 1px solid #e2e8f0; padding-top: 12px; margin-top: 12px;">
+                    <label style="font-weight: 600; color: #2d3748;">📹 视频保存配置</label>
+                </div>
+                <div class="form-group" style="display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="line_crossing-enable-video-save-input" style="width: auto; margin: 0;">
+                    <label for="line_crossing-enable-video-save-input" style="margin: 0; font-weight: normal;">启用视频保存（默认关闭，不开启则不执行绘制操作）</label>
+                </div>
+                <div class="form-group">
+                    <label>视频保存目录</label>
+                    <input type="text" id="line_crossing-video-save-dir-input" value="./videos" placeholder="例如: ./videos">
+                </div>
+                <div class="form-group">
+                    <label>视频帧率（FPS）</label>
+                    <input type="number" id="line_crossing-video-fps-input" value="25" min="1" max="60">
                 </div>
             </div>
             
@@ -1092,8 +1107,14 @@ HTML_TEMPLATE = '''
             if (serviceKey === 'line_crossing') {
                 const batchTimeout = document.getElementById(`${serviceKey}-batch-timeout-input`).value || '0.1';
                 const model = document.getElementById(`${serviceKey}-model-input`).value;
+                const enableVideoSave = document.getElementById(`${serviceKey}-enable-video-save-input`).checked;
+                const videoSaveDir = document.getElementById(`${serviceKey}-video-save-dir-input`).value || './videos';
+                const videoFps = document.getElementById(`${serviceKey}-video-fps-input`).value || '25';
                 requestBody.batch_timeout = parseFloat(batchTimeout);
                 requestBody.infer_ip = inferIp;  // 绊线算法也需要推理端点IP
+                requestBody.enable_video_save = enableVideoSave;
+                requestBody.video_save_dir = videoSaveDir;
+                requestBody.video_fps = parseInt(videoFps);
                 if (model) {
                     requestBody.model = model;
                 }
@@ -1684,6 +1705,10 @@ def api_start_service():
     easydarwin_url = data.get('easydarwin_url', '127.0.0.1:5066')  # EasyDarwin地址，默认为127.0.0.1:5066
     service_id_prefix = data.get('service_id_prefix', 'yolo11x_head_detector')
     model_path = data.get('model', None)  # 模型路径（绊线算法需要）
+    # 视频保存配置（绊线算法）
+    enable_video_save = data.get('enable_video_save', False)  # 是否启用视频保存
+    video_save_dir = data.get('video_save_dir', './videos')  # 视频保存目录
+    video_fps = data.get('video_fps', 25)  # 视频帧率
     
     if service_key not in SERVICES:
         return jsonify({'success': False, 'message': '未知服务'})
@@ -1761,9 +1786,9 @@ def api_start_service():
 
             # 根据服务类型构建不同的启动命令
             if service_key == 'line_crossing':
-                # 绊线算法使用NPU（与人数统计算法相同）
+                # 绊线算法使用NPU（OM模型）
                 if model_path is None or model_path == '':
-                    model_path = str(WEIGHT_DIR / 'best.om')  # 使用与人数统计算法相同的模型
+                    model_path = str(WEIGHT_DIR / 'best.om')  # 使用OM模型
                 
                 # 检测是否在打包后的环境中
                 service_exe = get_service_executable(service['script'])
@@ -1776,11 +1801,17 @@ def api_start_service():
                         '--device-id', str(device_id),  # Ascend NPU设备ID
                         '--easydarwin', easydarwin_url,
                         '--host-ip', infer_ip,  # 传递推理端点IP给服务，用于注册到EasyDarwin
-                        '--model', model_path,  # 模型路径
+                        '--model', model_path,  # 模型路径（.om文件）
                         '--batch-size', str(batch_size),
-                        '--batch-timeout', str(batch_timeout),
-                        '--log-dir', str(LOGS_DIR)  # 日志目录
+                        '--batch-timeout', str(batch_timeout)
                     ]
+                    # 如果启用视频保存，添加相关参数
+                    if enable_video_save:
+                        cmd.extend([
+                            '--enable-video-save',
+                            '--video-save-dir', str(video_save_dir),
+                            '--video-fps', str(video_fps)
+                        ])
                 else:
                     # 开发环境，使用Python运行脚本
                     script_path = str(BASE_DIR / service['script'])
@@ -1792,11 +1823,17 @@ def api_start_service():
                         '--device-id', str(device_id),  # Ascend NPU设备ID
                         '--easydarwin', easydarwin_url,
                         '--host-ip', infer_ip,  # 传递推理端点IP给服务，用于注册到EasyDarwin
-                        '--model', model_path,  # 模型路径
+                        '--model', model_path,  # 模型路径（.om文件）
                         '--batch-size', str(batch_size),
-                        '--batch-timeout', str(batch_timeout),
-                        '--log-dir', str(LOGS_DIR)  # 日志目录
+                        '--batch-timeout', str(batch_timeout)
                     ]
+                    # 如果启用视频保存，添加相关参数
+                    if enable_video_save:
+                        cmd.extend([
+                            '--enable-video-save',
+                            '--video-save-dir', str(video_save_dir),
+                            '--video-fps', str(video_fps)
+                        ])
             else:
                 # 实时检测服务使用NPU
                 # 使用相对路径，确保在打包后也能正确工作
@@ -1836,9 +1873,13 @@ def api_start_service():
             log_handle.write(f"\n{'='*60}\n")
             log_handle.write(f"服务启动: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             if service_key == 'line_crossing':
-                log_handle.write(f"DEVICE: {device_id}, 端口: {inst_port}, 批处理: {batch_size}, 超时: {batch_timeout}\n")
+                log_handle.write(f"NPU设备: {device_id}, 端口: {inst_port}, 批处理: {batch_size}, 超时: {batch_timeout}\n")
                 log_handle.write(f"模型路径: {model_path}\n")
                 log_handle.write(f"推理端点IP: {infer_ip} (用于注册到EasyDarwin)\n")
+                if enable_video_save:
+                    log_handle.write(f"视频保存: 已启用 (目录: {video_save_dir}, 帧率: {video_fps})\n")
+                else:
+                    log_handle.write(f"视频保存: 未启用\n")
             else:
                 log_handle.write(f"DEVICE: {device_id}, 端口: {inst_port}, 批处理: {batch_size}\n")
                 log_handle.write(f"推理端点IP: {infer_ip} (用于注册到EasyDarwin)\n")
@@ -1869,6 +1910,10 @@ def api_start_service():
                     instance_config['batch_timeout'] = batch_timeout
                     if model_path:
                         instance_config['model_path'] = model_path
+                    instance_config['enable_video_save'] = enable_video_save
+                    if enable_video_save:
+                        instance_config['video_save_dir'] = video_save_dir
+                        instance_config['video_fps'] = video_fps
                 
                 instance = {
                     'process': process,

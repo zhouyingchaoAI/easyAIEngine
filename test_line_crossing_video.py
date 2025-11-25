@@ -2,6 +2,7 @@
 """
 绊线算法视频测试Demo
 读取mp4视频，进行目标跟踪，绘制轨迹并保存
+支持绊线配置绘制、跟踪轨迹、穿越变色等功能
 """
 import os
 import sys
@@ -10,6 +11,7 @@ import numpy as np
 import argparse
 from pathlib import Path
 import time
+import json
 
 # 导入ACL推理函数
 from predict import init_acl_resource, load_om_model, om_infer, release_acl_resource
@@ -71,6 +73,8 @@ class KalmanObjectTracker:
         self.center_history = []
         self.last_update = time.time()
         self.missed = 0
+        self.crossed_lines = set()  # 已穿越的绊线ID集合
+        self.is_crossed = False  # 是否已穿越绊线（用于变色）
 
         cx, cy = self.get_center(bbox)
         self.width = bbox[2] - bbox[0]
@@ -128,6 +132,7 @@ class KalmanTrackerManager:
         self.max_center_distance = center_distance * self.frame_step
         self.trackers = {}
         self.next_id = 1
+        self.line_crossing_counts = {}  # 绊线穿越计数 {line_id: count}
 
     @staticmethod
     def _iou(bbox1, bbox2):
@@ -239,18 +244,132 @@ class KalmanTrackerManager:
             del self.trackers[track_id]
 
         return list(self.trackers.values())
+    
+    def get_trajectory(self, tracker):
+        """获取轨迹（最近两个点）"""
+        if len(tracker.center_history) >= 2:
+            return tracker.center_history[-2], tracker.center_history[-1]
+        return None
+    
+    @staticmethod
+    def _segments_intersect(p1, p2, p3, p4):
+        """判断两条线段是否相交"""
+        def ccw(A, B, C):
+            return (C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0])
+        
+        return ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4)
+    
+    @staticmethod
+    def _get_cross_direction(start, end, line_p1, line_p2):
+        """判断跨越方向"""
+        def cross_product(o, a, b):
+            return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+        
+        cp_start = cross_product(line_p1, line_p2, start)
+        cp_end = cross_product(line_p1, line_p2, end)
+        
+        if cp_start > 0 and cp_end < 0:
+            return 'in'
+        elif cp_start < 0 and cp_end > 0:
+            return 'out'
+        
+        return 'unknown'
+    
+    def check_line_crossing(self, line_regions, image_size=None):
+        """检查跟踪目标是否跨越线段"""
+        if not line_regions:
+            return {}
+        
+        crossing_results = {}
+        width, height = image_size if image_size else (1920, 1080)
+        
+        for region in line_regions:
+            if not region.get('enabled', True):
+                continue
+            
+            if region.get('type') != 'line':
+                continue
+            
+            region_id = region.get('id', 'line_unknown')
+            points = region.get('points', [])
+            direction = region.get('properties', {}).get('direction', 'both')
+            
+            if len(points) < 2:
+                continue
+            
+            # 转换坐标
+            p1_raw = points[0]
+            p2_raw = points[1]
+            
+            # 判断是否为归一化坐标
+            coord_type = (region.get('coordinate_type') or '').lower()
+            if not coord_type and any(0 <= coord <= 1 for point in points for coord in point):
+                coord_type = 'normalized'
+            
+            if coord_type == 'normalized' or all(0 <= coord <= 1 for coord in p1_raw + p2_raw):
+                p1 = (int(p1_raw[0] * width), int(p1_raw[1] * height))
+                p2 = (int(p2_raw[0] * width), int(p2_raw[1] * height))
+            else:
+                p1 = tuple(map(int, p1_raw))
+                p2 = tuple(map(int, p2_raw))
+            
+            # 初始化计数
+            if region_id not in self.line_crossing_counts:
+                self.line_crossing_counts[region_id] = 0
+            
+            # 检查每个跟踪器是否跨越线段
+            for tracker in self.trackers.values():
+                trajectory = self.get_trajectory(tracker)
+                if trajectory is None:
+                    continue
+                
+                start_point, end_point = trajectory
+                
+                if self._segments_intersect(start_point, end_point, p1, p2):
+                    cross_direction = self._get_cross_direction(start_point, end_point, p1, p2)
+                    
+                    should_count = False
+                    if direction == 'both':
+                        should_count = True
+                    elif direction == 'in' and cross_direction == 'in':
+                        should_count = True
+                    elif direction == 'out' and cross_direction == 'out':
+                        should_count = True
+                    
+                    if should_count:
+                        cross_key = f"{region_id}_{tracker.track_id}"
+                        if cross_key not in tracker.crossed_lines:
+                            # 新穿越
+                            self.line_crossing_counts[region_id] += 1
+                            tracker.crossed_lines.add(cross_key)
+                            tracker.is_crossed = True
+                            print(f"    [绊线穿越] ID:{tracker.track_id} 跨线 {region_id} ({cross_direction}) -> 累计: {self.line_crossing_counts[region_id]}")
+            
+            crossing_results[region_id] = {
+                'region_name': region.get('name', region_id),
+                'count': self.line_crossing_counts[region_id],
+                'direction': direction,
+                'points': [p1, p2]
+            }
+        
+        return crossing_results
 
 
-def draw_trajectory(image, tracker, color=None):
-    """在图像上绘制跟踪轨迹"""
+def draw_trajectory(image, tracker, color=None, is_crossed=False):
+    """在图像上绘制跟踪轨迹，穿越后变色"""
     if color is None:
         # 根据track_id生成颜色
         np.random.seed(tracker.track_id)
         color = tuple(map(int, np.random.randint(0, 255, 3)))
     
-    # 绘制当前边界框
+    # 如果已穿越绊线，使用红色
+    if tracker.is_crossed or is_crossed:
+        color = (0, 0, 255)  # 红色 (BGR格式)
+    
+    # 绘制当前边界框（穿越后加粗）
     x1, y1, x2, y2 = map(int, tracker.bbox)
-    cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
+    thickness = 3 if tracker.is_crossed else 2
+    cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)
     
     # 绘制轨迹（中心点连线）
     if len(tracker.center_history) >= 2:
@@ -259,16 +378,20 @@ def draw_trajectory(image, tracker, color=None):
             cx, cy = map(int, center)
             points.append((cx, cy))
         
-        # 绘制轨迹线
+        # 绘制轨迹线（穿越后加粗）
+        line_thickness = 3 if tracker.is_crossed else 2
         for i in range(len(points) - 1):
-            cv2.line(image, points[i], points[i + 1], color, 2)
+            cv2.line(image, points[i], points[i + 1], color, line_thickness)
         
         # 绘制轨迹点
+        point_radius = 4 if tracker.is_crossed else 3
         for point in points:
-            cv2.circle(image, point, 3, color, -1)
+            cv2.circle(image, point, point_radius, color, -1)
     
     # 绘制track_id和置信度
     label = f"ID:{tracker.track_id} {tracker.class_name} {tracker.confidence:.2f}"
+    if tracker.is_crossed:
+        label += " [CROSSED]"
     label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
     label_y = max(y1 - 5, label_size[1])
     cv2.rectangle(image, (x1, label_y - label_size[1] - 5), 
@@ -279,9 +402,99 @@ def draw_trajectory(image, tracker, color=None):
     return image
 
 
+def draw_line_config(image, line_regions, image_size=None):
+    """绘制绊线配置"""
+    if not line_regions:
+        return
+    
+    width, height = image_size if image_size else (image.shape[1], image.shape[0])
+    
+    for region in line_regions:
+        if not region.get('enabled', True):
+            continue
+        
+        if region.get('type') != 'line':
+            continue
+        
+        points = region.get('points', [])
+        if len(points) < 2:
+            continue
+        
+        region_id = region.get('id', 'line_unknown')
+        region_name = region.get('name', region_id)
+        
+        # 转换坐标
+        p1_raw = points[0]
+        p2_raw = points[1]
+        
+        coord_type = (region.get('coordinate_type') or '').lower()
+        if not coord_type and any(0 <= coord <= 1 for point in points for coord in point):
+            coord_type = 'normalized'
+        
+        if coord_type == 'normalized' or all(0 <= coord <= 1 for coord in p1_raw + p2_raw):
+            p1 = (int(p1_raw[0] * width), int(p1_raw[1] * height))
+            p2 = (int(p2_raw[0] * width), int(p2_raw[1] * height))
+        else:
+            p1 = tuple(map(int, p1_raw))
+            p2 = tuple(map(int, p2_raw))
+        
+        # 绘制绊线（黄色粗线）
+        cv2.line(image, p1, p2, (0, 255, 255), 3)
+        
+        # 在线段中点绘制名称和方向
+        mid_x = (p1[0] + p2[0]) // 2
+        mid_y = (p1[1] + p2[1]) // 2
+        
+        direction = region.get('properties', {}).get('direction', 'both')
+        direction_text = {'in': '入', 'out': '出', 'both': '双向'}.get(direction, direction)
+        
+        label = f"{region_name} [{direction_text}]"
+        label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        
+        # 绘制文字背景
+        cv2.rectangle(image, 
+                     (mid_x - label_size[0] // 2 - 5, mid_y - label_size[1] - 5),
+                     (mid_x + label_size[0] // 2 + 5, mid_y + 5),
+                     (0, 255, 255), -1)
+        
+        # 绘制文字
+        cv2.putText(image, label, 
+                   (mid_x - label_size[0] // 2, mid_y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+        
+        # 在线段端点绘制箭头指示方向
+        if direction != 'both':
+            # 计算箭头方向
+            dx = p2[0] - p1[0]
+            dy = p2[1] - p1[1]
+            length = np.sqrt(dx*dx + dy*dy)
+            if length > 0:
+                dx /= length
+                dy /= length
+                
+                # 在p1或p2处绘制箭头
+                arrow_point = p2 if direction == 'out' else p1
+                arrow_tip = (int(arrow_point[0] + dx * 15), int(arrow_point[1] + dy * 15))
+                
+                # 绘制箭头
+                cv2.arrowedLine(image, arrow_point, arrow_tip, (0, 255, 255), 3, tipLength=0.3)
+
+
+def load_algo_config(config_path):
+    """加载算法配置文件"""
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        print(f"✓ 成功加载配置文件: {config_path}")
+        return config
+    except Exception as e:
+        print(f"⚠️  加载配置文件失败: {str(e)}")
+        return None
+
+
 def process_video(input_video, output_video, model_path, device_id=0,
-                 confidence_threshold=0.5, frame_step=1):
-    """处理视频：推理、跟踪、绘制轨迹"""
+                 confidence_threshold=0.5, frame_step=1, config_path=None):
+    """处理视频：推理、跟踪、绘制轨迹、绘制绊线、穿越变色"""
     
     print("=" * 60)
     print("绊线算法视频测试Demo")
@@ -292,7 +505,21 @@ def process_video(input_video, output_video, model_path, device_id=0,
     print(f"设备ID: {device_id}")
     print(f"置信度阈值: {confidence_threshold}")
     print(f"抽帧频率: 每 {frame_step} 帧处理一次")
+    if config_path:
+        print(f"配置文件: {config_path}")
+    else:
+        print(f"配置文件: 未指定（将不绘制绊线）")
     print("=" * 60)
+    
+    # 加载绊线配置
+    algo_config = None
+    line_regions = []
+    if config_path and os.path.exists(config_path):
+        algo_config = load_algo_config(config_path)
+        if algo_config:
+            regions = algo_config.get('regions', [])
+            line_regions = [r for r in regions if r.get('type') == 'line' and r.get('enabled', True)]
+            print(f"✓ 加载到 {len(line_regions)} 条绊线配置")
     
     # 初始化ACL
     print("\n正在初始化ACL...")
@@ -336,6 +563,7 @@ def process_video(input_video, output_video, model_path, device_id=0,
     frame_count = 0
     total_inference_time = 0
     processed_frames = 0
+    line_crossing_results = {}  # 初始化，用于显示统计
     
     print(f"\n开始处理视频...")
     print("=" * 60)
@@ -355,6 +583,15 @@ def process_video(input_video, output_video, model_path, device_id=0,
             if (frame_count - 1) % frame_step != 0:
                 skipped = True
                 trackers = tracker_manager.predict_only()
+                
+                # 绘制绊线配置
+                if line_regions:
+                    draw_line_config(frame, line_regions, (width, height))
+                
+                # 绘制轨迹
+                for tracker in trackers:
+                    draw_trajectory(frame, tracker)
+                
                 info_text = [
                     f"Frame: {frame_count}/{total_frames}",
                     f"Skipped (frame_step={frame_step})",
@@ -365,8 +602,19 @@ def process_video(input_video, output_video, model_path, device_id=0,
                     cv2.putText(frame, text, (10, y_offset),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
                     y_offset += 25
-                for tracker in trackers:
-                    draw_trajectory(frame, tracker)
+                
+                # 显示绊线统计（使用最新的统计结果）
+                if line_crossing_results:
+                    info_text = ["Line Crossing:"]
+                    for line_id, line_info in line_crossing_results.items():
+                        info_text.append(f"  {line_info['region_name']}: {line_info['count']}")
+                    for text in info_text:
+                        color = (255, 255, 0) if text.startswith("  ") else (0, 200, 255)
+                        font_scale = 0.5 if text.startswith("  ") else 0.6
+                        cv2.putText(frame, text, (10, y_offset),
+                                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, 2)
+                        y_offset += 25
+                
                 out.write(frame)
                 continue
 
@@ -397,7 +645,17 @@ def process_video(input_video, output_video, model_path, device_id=0,
             # 更新跟踪器
             trackers = tracker_manager.update(detections)
             
-            # 绘制轨迹
+            # 检测绊线穿越
+            line_crossing_results = {}
+            if line_regions:
+                image_size = (width, height)
+                line_crossing_results = tracker_manager.check_line_crossing(line_regions, image_size)
+            
+            # 绘制绊线配置
+            if line_regions:
+                draw_line_config(frame, line_regions, (width, height))
+            
+            # 绘制轨迹（穿越后会变色）
             for tracker in trackers:
                 draw_trajectory(frame, tracker)
             
@@ -408,10 +666,23 @@ def process_video(input_video, output_video, model_path, device_id=0,
                 f"Tracks: {len(trackers)}",
                 f"Inference: {inference_time:.1f}ms"
             ]
+            
+            # 添加绊线统计信息
+            if line_crossing_results:
+                info_text.append("")
+                info_text.append("Line Crossing:")
+                for line_id, line_info in line_crossing_results.items():
+                    info_text.append(f"  {line_info['region_name']}: {line_info['count']}")
+            
             y_offset = 20
             for text in info_text:
+                if text == "":
+                    y_offset += 5
+                    continue
+                color = (0, 255, 0) if not text.startswith("  ") else (255, 255, 0)
+                font_scale = 0.6 if not text.startswith("  ") else 0.5
                 cv2.putText(frame, text, (10, y_offset), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, 2)
                 y_offset += 25
             
             # 写入视频
@@ -456,6 +727,8 @@ def main():
                         help='置信度阈值 (默认: 0.5)')
     parser.add_argument('--frame-step', type=int, default=1,
                         help='抽帧频率，每N帧处理一次 (默认: 1，处理全部帧)')
+    parser.add_argument('--config', '-c', default=None,
+                        help='绊线配置文件路径 (algo_config.json)')
     
     args = parser.parse_args()
     
@@ -478,6 +751,12 @@ def main():
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
     
+    # 检查配置文件
+    config_path = args.config
+    if config_path and not os.path.exists(config_path):
+        print(f"警告: 配置文件不存在: {config_path}，将不绘制绊线")
+        config_path = None
+    
     # 处理视频
     try:
         process_video(
@@ -486,7 +765,8 @@ def main():
             model_path=model_path,
             device_id=args.device_id,
             confidence_threshold=args.confidence,
-            frame_step=args.frame_step
+            frame_step=args.frame_step,
+            config_path=config_path
         )
     except KeyboardInterrupt:
         print("\n\n用户中断")
