@@ -26,6 +26,10 @@ from pathlib import Path
 from datetime import datetime
 import uuid
 import atexit
+try:
+    from scipy.optimize import linear_sum_assignment as _hungarian_assignment
+except ImportError:
+    _hungarian_assignment = None
 
 # 尝试导入 ThreadingHTTPServer，如果不存在则创建
 try:
@@ -44,7 +48,7 @@ CONFIG = {
     'task_types': ['绊线人数统计'],
     'port': 7903,  # 使用不同的端口
     'host': '0.0.0.0',
-    'easydarwin_url': '127.0.0.1:5066',
+    'easydarwin_url': '172.16.5.207:5066',
     'heartbeat_interval': 30,  # 秒
     'device_id': 0,  # Ascend NPU设备ID
     # 批处理配置
@@ -56,6 +60,8 @@ CONFIG = {
     'enable_video_save': False,  # 是否保存过程视频（默认关闭）
     'video_save_dir': './videos',  # 视频保存目录
     'video_fps': 25,  # 视频帧率
+    'video_segment_duration': 60,  # 每个视频片段时长（秒），默认1分钟
+    'video_segment_max_size_mb': 500,  # 每个视频片段最大大小（MB），默认500MB
     # 视频绘制配置（默认都开启，可通过algo_config覆盖）
     'video_draw_trajectory': True,  # 是否绘制跟踪轨迹
     'video_draw_line_config': True,  # 是否绘制绊线配置
@@ -72,7 +78,7 @@ REGISTER_THREAD = None
 REGISTERED = False  # 注册状态标志
 TRACKER_MANAGER = None
 TRACKER_LOCK = threading.Lock()
-VIDEO_WRITERS = {}
+VIDEO_WRITERS = {}  # {task_id: {'writer': cv2.VideoWriter, 'path': Path, 'start_time': float, 'frame_count': int}}
 VIDEO_WRITERS_LOCK = threading.Lock()
 
 # 统计信息（改为与实时算法一致的格式）
@@ -267,8 +273,75 @@ class InferenceRequest:
         self.submit_time = time.time()
 
 
-class ObjectTracker:
-    """简单的目标跟踪器（基于IOU匹配）"""
+def _linear_sum_assignment(cost_matrix):
+    """
+    使用SciPy的匈牙利算法；若不可用则采用贪心匹配回退，保证在线服务不依赖额外包。
+    """
+    if _hungarian_assignment is not None:
+        return _hungarian_assignment(cost_matrix)
+    
+    rows, cols = cost_matrix.shape
+    flat_indices = np.argsort(cost_matrix, axis=None)
+    used_rows = set()
+    used_cols = set()
+    row_ind = []
+    col_ind = []
+    
+    for flat_idx in flat_indices:
+        r = flat_idx // cols
+        c = flat_idx % cols
+        if r in used_rows or c in used_cols:
+            continue
+        row_ind.append(r)
+        col_ind.append(c)
+        used_rows.add(r)
+        used_cols.add(c)
+    
+    return np.array(row_ind, dtype=int), np.array(col_ind, dtype=int)
+
+
+class ImprovedKalmanFilter2D:
+    """更平滑的常速度Kalman滤波器（优化用于人员密集场景）"""
+    
+    def __init__(self, dt=1.0):
+        self.dt = dt
+        self.F = np.array([
+            [1, 0, dt, 0],
+            [0, 1, 0, dt],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]
+        ], dtype=float)
+        self.H = np.array([
+            [1, 0, 0, 0],
+            [0, 1, 0, 0]
+        ], dtype=float)
+        # 大幅降低过程噪声，显著提高轨迹平滑度（减少抖动）
+        self.Q = np.diag([0.08, 0.08, 0.8, 0.8])  # 进一步降低，从[0.15, 0.15, 1.5, 1.5]
+        # 大幅降低观测噪声，提高平滑度
+        self.R = np.eye(2, dtype=float) * 1.2  # 从1.8进一步降低
+        self.P = np.eye(4, dtype=float) * 5.0  # 从10.0进一步降低
+        self.state = np.zeros((4, 1), dtype=float)
+    
+    def initialize(self, x, y):
+        self.state = np.array([[x], [y], [0.0], [0.0]], dtype=float)
+    
+    def predict(self):
+        self.state = self.F @ self.state
+        self.P = self.F @ self.P @ self.F.T + self.Q
+        return self.state[:2].flatten()
+    
+    def update(self, x, y):
+        z = np.array([[x], [y]], dtype=float)
+        y_residual = z - (self.H @ self.state)
+        S = self.H @ self.P @ self.H.T + self.R
+        K = self.P @ self.H.T @ np.linalg.inv(S)
+        self.state = self.state + K @ y_residual
+        self.P = (np.eye(4) - K @ self.H) @ self.P
+        return self.state[:2].flatten()
+
+
+class ImprovedObjectTracker:
+    """参考测试脚本的目标跟踪实体（带Kalman滤波与轨迹历史，优化用于人员密集场景）"""
     
     def __init__(self, track_id, bbox, confidence, class_name):
         self.track_id = track_id
@@ -277,218 +350,651 @@ class ObjectTracker:
         self.class_name = class_name
         self.center_history = []
         self.last_update = time.time()
-        self.crossed_lines = set()
-        self.is_crossed = False  # 是否已穿越绊线（用于视频绘制变色）
+        self.missed = 0
+        self.crossed_lines = {}  # 改为字典：{line_key: (last_cross_segment, last_cross_direction)}
+        self.is_crossed = False
+        self.hits = 1
+        # 添加速度历史，用于改进匹配
+        self.velocity_history = []
+        # 添加指数移动平均（EMA）用于轨迹平滑
+        self.ema_cx = None
+        self.ema_cy = None
+        self.ema_alpha = 0.55  # EMA平滑系数（越小越平滑，但响应越慢）
         
-        center = self.get_center(bbox)
-        self.center_history.append(center)
+        cx, cy = self.get_center(bbox)
+        self.width = bbox[2] - bbox[0]
+        self.height = bbox[3] - bbox[1]
+        self.kf = ImprovedKalmanFilter2D()
+        self.kf.initialize(cx, cy)
+        # 初始化EMA
+        self.ema_cx = cx
+        self.ema_cy = cy
+        self.center_history.append((cx, cy))
     
     @staticmethod
     def get_center(bbox):
-        """获取边界框中心点"""
         x1, y1, x2, y2 = bbox
-        return ((x1 + x2) / 2, (y1 + y2) / 2)
+        return (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    
+    def predict(self):
+        cx, cy = self.kf.predict()
+        
+        # 使用EMA进行平滑
+        if self.ema_cx is not None and self.ema_cy is not None:
+            self.ema_cx = self.ema_alpha * cx + (1 - self.ema_alpha) * self.ema_cx
+            self.ema_cy = self.ema_alpha * cy + (1 - self.ema_alpha) * self.ema_cy
+            cx, cy = self.ema_cx, self.ema_cy
+        else:
+            self.ema_cx = cx
+            self.ema_cy = cy
+        
+        # 如果历史轨迹足够长，使用短期移动平均适度平滑
+        if len(self.center_history) >= 3:
+            # 对最近3个点进行移动平均
+            last_points = self.center_history[-3:]
+            avg_cx = sum(p[0] for p in last_points) / len(last_points)
+            avg_cy = sum(p[1] for p in last_points) / len(last_points)
+            # 使用加权平均：EMA值权重0.8，历史平均值权重0.2，减小滞后
+            cx = 0.8 * cx + 0.2 * avg_cx
+            cy = 0.8 * cy + 0.2 * avg_cy
+        
+        self._update_bbox_from_center(cx, cy)
+        self.center_history.append((cx, cy))
+        if len(self.center_history) > 100:  # 增加历史长度，用于更好的轨迹预测
+            self.center_history.pop(0)
+        self.missed += 1
+        return self.bbox
     
     def update(self, bbox, confidence):
-        """更新跟踪器"""
-        self.bbox = bbox
+        cx, cy = self.get_center(bbox)
+        # 计算速度（用于改进匹配）
+        if len(self.center_history) > 0:
+            last_cx, last_cy = self.center_history[-1]
+            vx = cx - last_cx
+            vy = cy - last_cy
+            self.velocity_history.append((vx, vy))
+            if len(self.velocity_history) > 10:
+                self.velocity_history.pop(0)
+        
+        # 在更新卡尔曼滤波器之前，先对检测值进行平滑
+        if len(self.center_history) >= 1:
+            last_cx, last_cy = self.center_history[-1]
+            # 对检测值进行轻度平滑：85%检测值 + 15%历史值，减少延迟
+            cx = 0.85 * cx + 0.15 * last_cx
+            cy = 0.85 * cy + 0.15 * last_cy
+        
+        self.kf.update(cx, cy)
+        cx_smoothed, cy_smoothed = self.kf.state[0, 0], self.kf.state[1, 0]
+        
+        # 使用EMA进一步平滑卡尔曼滤波器的输出
+        if self.ema_cx is not None and self.ema_cy is not None:
+            self.ema_cx = self.ema_alpha * cx_smoothed + (1 - self.ema_alpha) * self.ema_cx
+            self.ema_cy = self.ema_alpha * cy_smoothed + (1 - self.ema_alpha) * self.ema_cy
+            cx_smoothed, cy_smoothed = self.ema_cx, self.ema_cy
+        else:
+            self.ema_cx = cx_smoothed
+            self.ema_cy = cy_smoothed
+        
+        # 如果历史轨迹足够长，使用短期移动平均进一步平滑
+        if len(self.center_history) >= 3:
+            last_points = self.center_history[-3:]
+            avg_cx = sum(p[0] for p in last_points) / len(last_points)
+            avg_cy = sum(p[1] for p in last_points) / len(last_points)
+            # 使用加权平均：EMA值权重0.85，历史平均值权重0.15，提升响应速度
+            cx_smoothed = 0.85 * cx_smoothed + 0.15 * avg_cx
+            cy_smoothed = 0.85 * cy_smoothed + 0.15 * avg_cy
+        
+        # 增加bbox尺寸更新的平滑系数，减少尺寸抖动
+        self.width = 0.9 * self.width + 0.1 * (bbox[2] - bbox[0])  # 从0.85/0.15改为0.9/0.1
+        self.height = 0.9 * self.height + 0.1 * (bbox[3] - bbox[1])
+        
+        self._update_bbox_from_center(cx_smoothed, cy_smoothed)
         self.confidence = confidence
         self.last_update = time.time()
-        
-        center = self.get_center(bbox)
-        self.center_history.append(center)
-        
-        if len(self.center_history) > 10:
-            self.center_history.pop(0)
+        self.missed = 0
+        self.hits += 1
+    
+    def get_velocity(self):
+        """获取平均速度"""
+        if len(self.velocity_history) == 0:
+            return (0.0, 0.0)
+        vx_avg = sum(v[0] for v in self.velocity_history) / len(self.velocity_history)
+        vy_avg = sum(v[1] for v in self.velocity_history) / len(self.velocity_history)
+        return (vx_avg, vy_avg)
+    
+    def _update_bbox_from_center(self, cx, cy):
+        half_w = max(self.width / 2.0, 1.0)
+        half_h = max(self.height / 2.0, 1.0)
+        self.bbox = [
+            cx - half_w,
+            cy - half_h,
+            cx + half_w,
+            cy + half_h
+        ]
     
     def get_trajectory(self):
-        """获取轨迹（最近两个点）"""
+        """获取最近两点轨迹（保持向后兼容）"""
         if len(self.center_history) >= 2:
             return self.center_history[-2], self.center_history[-1]
         return None
     
-    @staticmethod
-    def iou(bbox1, bbox2):
-        """计算两个边界框的IOU"""
-        x1_1, y1_1, x2_1, y2_1 = bbox1
-        x1_2, y1_2, x2_2, y2_2 = bbox2
+    def get_recent_trajectory(self, num_points=10):
+        """获取最近的轨迹点（用于更鲁棒的穿越检测）"""
+        if len(self.center_history) < 2:
+            return []
+        # 返回最近的num_points个点，但至少返回2个点
+        return self.center_history[-min(num_points, len(self.center_history)):]
+    
+    def get_smoothed_trajectory(self, num_points=10, window_size=5):
+        """获取平滑后的轨迹点（使用更大的移动平均窗口减少抖动）"""
+        if len(self.center_history) < 2:
+            return []
         
-        x1_i = max(x1_1, x1_2)
-        y1_i = max(y1_1, y1_2)
-        x2_i = min(x2_1, x2_2)
-        y2_i = min(y2_1, y2_2)
+        recent_points = self.center_history[-min(num_points, len(self.center_history)):]
+        if len(recent_points) < window_size:
+            return recent_points
         
-        if x2_i < x1_i or y2_i < y1_i:
-            return 0.0
+        # 对轨迹进行移动平均平滑（使用更大的窗口）
+        smoothed = []
+        for i in range(len(recent_points)):
+            # 计算窗口内的平均值（使用更大的窗口）
+            start_idx = max(0, i - window_size // 2)
+            end_idx = min(len(recent_points), i + window_size // 2 + 1)
+            window_points = recent_points[start_idx:end_idx]
+            
+            # 使用加权平均，中心点权重更大
+            weights = []
+            center_idx = i
+            for j in range(start_idx, end_idx):
+                # 距离中心越近，权重越大
+                dist = abs(j - center_idx)
+                weight = max(0, 1.0 - dist / (window_size / 2.0))
+                weights.append(weight)
+            
+            total_weight = sum(weights)
+            if total_weight > 0:
+                avg_x = sum(p[0] * w for p, w in zip(window_points, weights)) / total_weight
+                avg_y = sum(p[1] * w for p, w in zip(window_points, weights)) / total_weight
+            else:
+                avg_x = recent_points[i][0]
+                avg_y = recent_points[i][1]
+            
+            smoothed.append((avg_x, avg_y))
         
-        intersection = (x2_i - x1_i) * (y2_i - y1_i)
-        area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
-        area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
-        union = area1 + area2 - intersection
-        
-        return intersection / union if union > 0 else 0.0
+        return smoothed
 
 
 class TrackerManager:
-    """目标跟踪管理器"""
+    """
+    稳定性更强的匈牙利+卡尔曼跟踪器，跨线累计逻辑对齐 test_line_crossing_video.py
+    优化用于人员密集场景：降低IOU阈值、增加距离容忍度、改进匹配算法
+    """
     
-    def __init__(self, iou_threshold=0.3, max_age=30):
-        self.trackers = {}
-        self.next_id = 1
+    def __init__(self, iou_threshold=0.05, max_missed=10, center_distance=200, frame_step=1):
+        # 进一步降低IOU阈值，在人员密集时更容忍遮挡（从0.10降到0.05）
         self.iou_threshold = iou_threshold
-        self.max_age = max_age
-        self.task_accumulators = defaultdict(lambda: defaultdict(int))
+        # 控制最大丢失帧数，默认10帧，快速清理丢失轨迹
+        self.base_max_missed = max_missed
+        # 适度降低中心距离阈值，避免误匹配（从250降低到200）
+        self.base_center_distance = center_distance
+        self.frame_step = frame_step
+        self.task_trackers = defaultdict(dict)              # task_id -> {track_id: tracker}
+        self.task_next_ids = defaultdict(lambda: 1)         # task_id -> 下一个track id
+        self.line_crossing_counts = defaultdict(lambda: defaultdict(int))
         self.last_reset_time = time.time()
         self.reset_interval = 24 * 60 * 60
     
-    def update(self, detections):
-        """更新跟踪器"""
-        current_time = time.time()
-        
-        matched_trackers = set()
-        matched_detections = set()
-        
-        for det_idx, detection in enumerate(detections):
-            best_iou = 0
-            best_tracker_id = None
-            
-            for track_id, tracker in self.trackers.items():
-                iou = ObjectTracker.iou(detection['bbox'], tracker.bbox)
-                if iou > self.iou_threshold and iou > best_iou:
-                    best_iou = iou
-                    best_tracker_id = track_id
-            
-            if best_tracker_id is not None:
-                self.trackers[best_tracker_id].update(detection['bbox'], detection['confidence'])
-                matched_trackers.add(best_tracker_id)
-                matched_detections.add(det_idx)
-        
-        for det_idx, detection in enumerate(detections):
-            if det_idx not in matched_detections:
-                tracker = ObjectTracker(
-                    self.next_id,
-                    detection['bbox'],
-                    detection['confidence'],
-                    detection['class']
-                )
-                self.trackers[self.next_id] = tracker
-                self.next_id += 1
-        
-        to_remove = []
-        for track_id, tracker in self.trackers.items():
-            if current_time - tracker.last_update > self.max_age:
-                to_remove.append(track_id)
-        
-        for track_id in to_remove:
-            del self.trackers[track_id]
-        
-        return list(self.trackers.values())
+    def _predict_all(self, task_id, frame_step=1):
+        trackers_dict = self.task_trackers[task_id]
+        effective_max_missed = self.base_max_missed * max(1, frame_step)
+        for tracker in trackers_dict.values():
+            tracker.predict()
+        to_delete = [tid for tid, tracker in trackers_dict.items() if tracker.missed > effective_max_missed]
+        for tid in to_delete:
+            del trackers_dict[tid]
+        return trackers_dict
     
-    def check_and_reset_accumulators(self):
-        """检查并重置累加器（每天自动清零）"""
+    def _ensure_task_state(self, task_id):
+        _ = self.task_trackers[task_id]
+        _ = self.task_next_ids[task_id]
+        _ = self.line_crossing_counts[task_id]
+    
+    def update(self, task_id, detections, frame_step=1):
+        """更新指定task的跟踪状态"""
+        self._ensure_task_state(task_id)
+        
+        if not detections:
+            return list(self._predict_all(task_id, frame_step).values())
+        
+        trackers_dict = self._predict_all(task_id, frame_step)
+        trackers_list = list(trackers_dict.items())
+        n_trk = len(trackers_list)
+        n_det = len(detections)
+        
+        effective_center_distance = self.base_center_distance * max(1, frame_step)
+        
+        if n_trk == 0:
+            for det in detections:
+                track_id = self.task_next_ids[task_id]
+                trackers_dict[track_id] = ImprovedObjectTracker(track_id, det['bbox'], det['confidence'], det['class'])
+                self.task_next_ids[task_id] += 1
+            return list(trackers_dict.values())
+        
+        # 两阶段匹配策略：先高IOU匹配，再低IOU/距离匹配
+        assigned_tracks = set()
+        assigned_dets = set()
+        
+        # 第一阶段：高IOU匹配（IOU > 0.25，提高阈值确保高质量匹配，避免一个目标多条轨迹）
+        # 使用贪心策略，但确保每个检测只匹配一次
+        stage1_candidates = []  # [(iou, tid, det_idx, tracker, det, score), ...]
+        for i, (tid, tracker) in enumerate(trackers_list):
+            for j, det in enumerate(detections):
+                iou = self._iou(det['bbox'], tracker.bbox)
+                if iou > 0.25:  # 提高阈值到0.25，确保高质量匹配
+                    # 计算综合得分：IOU + 跟踪器稳定性（hits越多越稳定）
+                    stability_score = min(tracker.hits / 10.0, 1.0)  # 归一化到[0, 1]
+                    combined_score = iou * 0.8 + stability_score * 0.2
+                    stage1_candidates.append((combined_score, iou, tid, j, tracker, det))
+        
+        # 按综合得分降序排序，优先匹配高质量和稳定的
+        stage1_candidates.sort(reverse=True, key=lambda x: x[0])
+        
+        # 执行第一阶段匹配（每个tracker和detection只匹配一次）
+        for combined_score, iou, tid, det_idx, tracker, det in stage1_candidates:
+            if tid in assigned_tracks or det_idx in assigned_dets:
+                continue
+            # 额外检查：如果跟踪器已经丢失很多帧，要求更高的IOU
+            if tracker.missed > 5 and iou < 0.35:
+                continue
+            tracker.update(det['bbox'], det['confidence'])
+            tracker.class_name = det.get('class', tracker.class_name)
+            assigned_tracks.add(tid)
+            assigned_dets.add(det_idx)
+        
+        # 第二阶段：中等IOU或距离匹配（使用匈牙利算法）
+        remaining_trackers = [(i, tid, tracker) for i, (tid, tracker) in enumerate(trackers_list) if tid not in assigned_tracks]
+        remaining_dets = [(j, det) for j, det in enumerate(detections) if j not in assigned_dets]
+        
+        if remaining_trackers and remaining_dets:
+            n_rem_trk = len(remaining_trackers)
+            n_rem_det = len(remaining_dets)
+            cost_matrix = np.full((n_rem_trk, n_rem_det), 999.0, dtype=np.float32)
+            
+            for i, (orig_i, tid, tracker) in enumerate(remaining_trackers):
+                for j, (orig_j, det) in enumerate(remaining_dets):
+                    iou = self._iou(det['bbox'], tracker.bbox)
+                    center_dist = self._center_distance(det['bbox'], tracker.bbox)
+                    
+                    # 计算轨迹预测位置（使用卡尔曼滤波器的预测）
+                    pred_cx, pred_cy = tracker.kf.state[0, 0], tracker.kf.state[1, 0]
+                    det_cx, det_cy = ImprovedObjectTracker.get_center(det['bbox'])
+                    pred_dist = np.hypot(det_cx - pred_cx, det_cy - pred_cy)
+                    
+                    # 速度一致性（如果可用）
+                    velocity_bonus = 0.0
+                    if len(tracker.velocity_history) > 0:
+                        vx, vy = tracker.get_velocity()
+                        if abs(vx) > 0.1 or abs(vy) > 0.1:
+                            # 基于速度的预测位置
+                            pred_cx_v = pred_cx + vx
+                            pred_cy_v = pred_cy + vy
+                            vel_dist = np.hypot(det_cx - pred_cx_v, det_cy - pred_cy_v)
+                            # 如果速度预测更准确，给予奖励
+                            if vel_dist < pred_dist:
+                                velocity_bonus = -0.2
+                    
+                    # 成本计算：综合考虑IOU、距离、预测距离、跟踪器稳定性
+                    # 跟踪器稳定性惩罚：丢失帧数越多，成本越高
+                    missed_penalty = min(tracker.missed / 10.0, 0.5)  # 最多增加0.5的成本
+                    # 跟踪器稳定性奖励：hits越多，成本越低
+                    stability_bonus = -min(tracker.hits / 20.0, 0.2)  # 最多减少0.2的成本
+                    
+                    if iou > 0.15:
+                        # 中等IOU：主要考虑IOU和距离
+                        cost = (1 - iou) * 0.6 + min(center_dist / effective_center_distance, 1.0) * 0.4 + velocity_bonus + missed_penalty + stability_bonus
+                    elif iou > 0.08:
+                        # 低IOU：主要考虑距离和预测距离
+                        cost = (1 - iou) * 0.3 + min(center_dist / effective_center_distance, 1.0) * 0.5 + min(pred_dist / effective_center_distance, 1.0) * 0.2 + velocity_bonus + missed_penalty + stability_bonus
+                    elif iou > 0.05:
+                        # 极低IOU：主要考虑距离，但增加成本
+                        cost = 0.5 + min(center_dist / effective_center_distance, 1.0) * 0.4 + min(pred_dist / effective_center_distance, 1.0) * 0.1 + velocity_bonus + missed_penalty + stability_bonus
+                    elif center_dist < effective_center_distance * 0.7:  # 降低距离限制，避免误匹配
+                        # 极低IOU但距离合理：纯距离匹配，但成本较高
+                        cost = 0.8 + min(center_dist / effective_center_distance, 1.0) * 0.2 + min(pred_dist / effective_center_distance, 1.0) * 0.1 + missed_penalty + stability_bonus
+                    else:
+                        # 距离较远，成本很高
+                        cost = 2.0 + min(center_dist / effective_center_distance, 2.0) + missed_penalty
+                    
+                    cost_matrix[i, j] = cost
+            
+            # 使用匈牙利算法进行匹配
+            row_ind, col_ind = _linear_sum_assignment(cost_matrix)
+            
+            # 执行第二阶段匹配（使用更严格的成本阈值，避免误匹配）
+            for i, j in zip(row_ind, col_ind):
+                if i >= n_rem_trk or j >= n_rem_det:
+                    continue
+                # 根据IOU动态调整成本阈值：IOU越高，允许的成本越高
+                orig_i, tid, tracker = remaining_trackers[i]
+                orig_j, det = remaining_dets[j]
+                iou = self._iou(det['bbox'], tracker.bbox)
+                
+                # 动态成本阈值：IOU越高，阈值越宽松
+                if iou > 0.15:
+                    max_cost = 3.0
+                elif iou > 0.08:
+                    max_cost = 2.5
+                elif iou > 0.05:
+                    max_cost = 2.0
+                else:
+                    max_cost = 1.5  # 极低IOU要求更严格
+                
+                if cost_matrix[i, j] > max_cost:
+                    continue
+                
+                # 额外检查：如果跟踪器丢失很多帧，要求更高的IOU
+                if tracker.missed > 10 and iou < 0.12:
+                    continue
+                
+                if tid in assigned_tracks or orig_j in assigned_dets:
+                    continue
+                tracker.update(det['bbox'], det['confidence'])
+                tracker.class_name = det.get('class', tracker.class_name)
+                assigned_tracks.add(tid)
+                assigned_dets.add(orig_j)
+        
+        # 第三阶段：对仍未匹配的tracker，尝试更宽松的距离匹配（但更严格，避免误匹配）
+        still_unmatched_trackers = [(tid, tracker) for tid, tracker in trackers_dict.items() if tid not in assigned_tracks]
+        still_unmatched_dets = [(j, det) for j, det in enumerate(detections) if j not in assigned_dets]
+        
+        if still_unmatched_trackers and still_unmatched_dets:
+            # 构建距离矩阵，找到最佳匹配对
+            stage3_candidates = []  # [(score, dist, iou, tid, det_idx, tracker, det), ...]
+            max_dist = effective_center_distance * 1.0  # 降低距离限制，避免误匹配
+            
+            for tid, tracker in still_unmatched_trackers:
+                pred_cx, pred_cy = tracker.kf.state[0, 0], tracker.kf.state[1, 0]
+                
+                for det_idx, det in still_unmatched_dets:
+                    det_cx, det_cy = ImprovedObjectTracker.get_center(det['bbox'])
+                    dist = np.hypot(det_cx - pred_cx, det_cy - pred_cy)
+                    iou = self._iou(det['bbox'], tracker.bbox)
+                    
+                    # 如果距离在合理范围内，且IOU不是太低，加入候选
+                    if dist < max_dist and iou > 0.03:  # 要求最小IOU
+                        # 综合得分：距离越近、IOU越高、跟踪器越稳定，得分越高
+                        stability_score = min(tracker.hits / 10.0, 1.0)
+                        combined_score = (1.0 - dist / max_dist) * 0.5 + iou * 0.3 + stability_score * 0.2
+                        stage3_candidates.append((combined_score, dist, iou, tid, det_idx, tracker, det))
+            
+            # 按综合得分降序排序，优先匹配高质量匹配
+            stage3_candidates.sort(reverse=True, key=lambda x: x[0])
+            
+            # 执行第三阶段匹配（每个tracker和detection只匹配一次）
+            for combined_score, dist, iou, tid, det_idx, tracker, det in stage3_candidates:
+                if tid in assigned_tracks or det_idx in assigned_dets:
+                    continue
+                # 额外检查：如果跟踪器丢失很多帧，要求更高的IOU或更近的距离
+                if tracker.missed > 15:
+                    if iou < 0.05 and dist > effective_center_distance * 0.6:
+                        continue
+                tracker.update(det['bbox'], det['confidence'])
+                tracker.class_name = det.get('class', tracker.class_name)
+                assigned_tracks.add(tid)
+                assigned_dets.add(det_idx)
+        
+        # 未匹配的检测创建新跟踪器（确保所有检测都被跟踪）
+        for det_idx, det in enumerate(detections):
+            if det_idx in assigned_dets:
+                continue
+            track_id = self.task_next_ids[task_id]
+            trackers_dict[track_id] = ImprovedObjectTracker(track_id, det['bbox'], det['confidence'], det['class'])
+            self.task_next_ids[task_id] += 1
+        
+        return list(trackers_dict.values())
+    
+    def _reset_line_counts_if_needed(self):
         current_time = time.time()
         if current_time - self.last_reset_time >= self.reset_interval:
-            print(f"  🔄 累加器自动清零（24小时间隔）")
-            for task_id in self.task_accumulators:
-                for region_id in self.task_accumulators[task_id]:
-                    old_count = self.task_accumulators[task_id][region_id]
-                    self.task_accumulators[task_id][region_id] = 0
-                    print(f"    {task_id}.{region_id}: {old_count} -> 0")
+            print("  🔄 跨线累计已超过24小时，自动清零")
+            self.line_crossing_counts = defaultdict(lambda: defaultdict(int))
             self.last_reset_time = current_time
     
     def check_line_crossing(self, task_id, regions, image_size=None):
-        """检查跟踪目标是否跨越线段"""
-        self.check_and_reset_accumulators()
+        """检查跨线并累加（与测试脚本保持一致逻辑）"""
+        self._reset_line_counts_if_needed()
+        trackers_dict = self.task_trackers.get(task_id, {})
+        if not trackers_dict:
+            return {}
         
+        width, height = image_size if image_size else (1920, 1080)
         crossing_results = {}
         
         for region in regions:
             if not region.get('enabled', True):
                 continue
-            
             if region.get('type') != 'line':
                 continue
-            
-            region_id = region.get('id')
             points = region.get('points', [])
-            direction = region.get('properties', {}).get('direction', 'both')
-            
             if len(points) < 2:
                 continue
             
-            p1 = tuple(points[0])
-            p2 = tuple(points[1])
+            region_id = region.get('id', 'line_unknown')
+            region_name = region.get('name', region_id)
+            direction = region.get('properties', {}).get('direction', 'both')
+            p1_raw = points[0]
+            p2_raw = points[1]
+            coord_type = (region.get('coordinate_type') or '').lower()
+            if not coord_type and any(0 <= coord <= 1 for point in points for coord in point):
+                coord_type = 'normalized'
             
-            if image_size and any(0 <= coord <= 1 for point in points for coord in point):
-                width, height = image_size
-                p1 = (int(points[0][0] * width), int(points[0][1] * height))
-                p2 = (int(points[1][0] * width), int(points[1][1] * height))
+            if coord_type in ('normalized', 'relative') or all(0 <= coord <= 1 for coord in p1_raw + p2_raw):
+                p1 = (int(p1_raw[0] * width), int(p1_raw[1] * height))
+                p2 = (int(p2_raw[0] * width), int(p2_raw[1] * height))
             else:
-                p1 = tuple(map(int, points[0]))
-                p2 = tuple(map(int, points[1]))
+                p1 = tuple(map(int, p1_raw))
+                p2 = tuple(map(int, p2_raw))
             
-            for tracker in self.trackers.values():
-                trajectory = tracker.get_trajectory()
-                if trajectory is None:
+            for tracker in trackers_dict.values():
+                # 使用平滑后的轨迹历史进行穿越检测（最多检查最近20个点）
+                # 使用平滑轨迹可以减少抖动对穿越检测的影响
+                recent_trajectory = tracker.get_smoothed_trajectory(num_points=20, window_size=3)
+                if len(recent_trajectory) < 2:
+                    # 如果平滑轨迹不够，使用原始轨迹
+                    recent_trajectory = tracker.get_recent_trajectory(num_points=20)
+                if len(recent_trajectory) < 2:
                     continue
                 
-                start_point, end_point = trajectory
+                # 检查轨迹的所有连续线段，找到穿越点
+                crossed = False
+                cross_direction = None
+                crossing_segment = None
                 
-                if self._segments_intersect(start_point, end_point, p1, p2):
-                    cross_direction = self._get_cross_direction(start_point, end_point, p1, p2)
+                # 从后往前检查（最近的轨迹优先）
+                for i in range(len(recent_trajectory) - 1, 0, -1):
+                    start_point = recent_trajectory[i-1]
+                    end_point = recent_trajectory[i]
                     
-                    should_count = False
-                    if direction == 'both':
-                        should_count = True
-                    elif direction == 'in' and cross_direction == 'in':
-                        should_count = True
-                    elif direction == 'out' and cross_direction == 'out':
-                        should_count = True
+                    # 检查线段是否与绊线相交
+                    if self._segments_intersect(start_point, end_point, p1, p2):
+                        crossed = True
+                        crossing_segment = (start_point, end_point)
+                        # 使用穿越线段判断方向
+                        cross_direction = self._get_cross_direction(start_point, end_point, p1, p2)
+                        break  # 找到穿越就停止
+                
+                # 如果没有找到直接相交，尝试使用更宽松的方法：检查轨迹是否跨越绊线
+                if not crossed and len(recent_trajectory) >= 3:
+                    # 检查轨迹起点和终点是否在绊线两侧
+                    first_point = recent_trajectory[0]
+                    last_point = recent_trajectory[-1]
                     
-                    if should_count:
-                        current_time = time.time()
-                        last_cross_time = getattr(tracker, f'last_cross_{region_id}', 0)
-                        if current_time - last_cross_time > 0.5:
-                            self.task_accumulators[task_id][region_id] += 1
-                            print(f"    [绊线统计] ID:{tracker.track_id} 跨线 {region_id} ({cross_direction}) -> 累加: {self.task_accumulators[task_id][region_id]}")
+                    # 计算点到直线的有向距离
+                    def point_to_line_side(point, line_p1, line_p2):
+                        """判断点在直线的哪一侧，返回>0或<0"""
+                        x, y = point
+                        x1, y1 = line_p1
+                        x2, y2 = line_p2
+                        # 使用叉积判断
+                        return (x2 - x1) * (y - y1) - (y2 - y1) * (x - x1)
+                    
+                    side_first = point_to_line_side(first_point, p1, p2)
+                    side_last = point_to_line_side(last_point, p1, p2)
+                    
+                    # 如果起点和终点在绊线两侧，且距离绊线足够近，认为发生了穿越
+                    if side_first * side_last < 0:  # 异号表示在两侧
+                        # 计算到绊线的最短距离
+                        def point_to_line_distance(point, line_p1, line_p2):
+                            """计算点到线段的最短距离"""
+                            x, y = point
+                            x1, y1 = line_p1
+                            x2, y2 = line_p2
                             
-                            setattr(tracker, f'last_cross_{region_id}', current_time)
+                            # 线段向量
+                            dx = x2 - x1
+                            dy = y2 - y1
+                            line_len_sq = dx * dx + dy * dy
                             
-                            cross_key = f"{task_id}_{region_id}_{tracker.track_id}"
-                            if cross_key not in tracker.crossed_lines:
-                                tracker.crossed_lines.add(cross_key)
-                                tracker.is_crossed = True  # 标记已穿越，用于视频绘制变色
+                            if line_len_sq < 1e-6:
+                                # 线段退化为点
+                                return np.hypot(x - x1, y - y1)
+                            
+                            # 计算投影参数t
+                            t = max(0, min(1, ((x - x1) * dx + (y - y1) * dy) / line_len_sq))
+                            
+                            # 投影点
+                            proj_x = x1 + t * dx
+                            proj_y = y1 + t * dy
+                            
+                            # 返回距离
+                            return np.hypot(x - proj_x, y - proj_y)
+                        
+                        # 检查轨迹中是否有足够近的点
+                        min_dist = float('inf')
+                        for point in recent_trajectory:
+                            dist = point_to_line_distance(point, p1, p2)
+                            min_dist = min(min_dist, dist)
+                        
+                        # 如果最近距离小于阈值（绊线长度的10%或50像素，取较大值）
+                        line_length = np.hypot(p2[0] - p1[0], p2[1] - p1[1])
+                        threshold = max(line_length * 0.1, 50.0)
+                        
+                        if min_dist < threshold:
+                            crossed = True
+                            # 使用起点和终点判断方向
+                            cross_direction = self._get_cross_direction(first_point, last_point, p1, p2)
+                            if cross_direction == 'unknown':
+                                # 如果无法判断，根据位置判断
+                                if side_first > 0 and side_last < 0:
+                                    cross_direction = 'in'
+                                elif side_first < 0 and side_last > 0:
+                                    cross_direction = 'out'
+                
+                if not crossed:
+                    continue
+                
+                # 检查方向是否符合要求
+                should_count = (
+                    direction == 'both' or
+                    (direction == 'in' and cross_direction == 'in') or
+                    (direction == 'out' and cross_direction == 'out')
+                )
+                if not should_count:
+                    continue
+                
+                cross_key = f"{task_id}_{region_id}_{tracker.track_id}"
+                
+                # 检查是否是新的穿越（避免同一帧内重复计数）
+                # 策略：记录最后一次穿越的轨迹段和方向
+                # - 如果方向改变（in<->out），允许计数（来回穿越）
+                # - 如果方向相同但穿越段距离较远，允许计数（可能是新的穿越）
+                # - 如果方向相同且穿越段很近，不重复计数（同一帧内重复检测）
+                is_new_crossing = True
+                if cross_key in tracker.crossed_lines:
+                    last_segment, last_direction = tracker.crossed_lines[cross_key]
+                    
+                    # 如果方向改变，允许计数（来回穿越）
+                    if cross_direction != last_direction:
+                        is_new_crossing = True
+                    else:
+                        # 方向相同，检查穿越段是否不同
+                        if crossing_segment:
+                            seg_start, seg_end = crossing_segment
+                            if last_segment and len(last_segment) == 2:
+                                last_seg_start, last_seg_end = last_segment
+                                # 计算穿越段的终点距离
+                                dist = np.hypot(seg_end[0] - last_seg_end[0], seg_end[1] - last_seg_end[1])
+                                # 如果距离很近（小于20像素），认为是同一穿越，不重复计数
+                                if dist < 20.0:
+                                    is_new_crossing = False
+                        else:
+                            # 如果没有crossing_segment，使用轨迹的最近点
+                            if len(recent_trajectory) >= 2:
+                                last_point = recent_trajectory[-1]
+                                if last_segment and len(last_segment) == 2:
+                                    last_seg_end = last_segment[1]
+                                    dist = np.hypot(last_point[0] - last_seg_end[0], last_point[1] - last_seg_end[1])
+                                    # 如果距离很近，认为是同一穿越
+                                    if dist < 20.0:
+                                        is_new_crossing = False
+                
+                if is_new_crossing:
+                    self.line_crossing_counts[task_id][region_id] += 1
+                    # 更新最后一次穿越记录
+                    if crossing_segment:
+                        tracker.crossed_lines[cross_key] = (crossing_segment, cross_direction)
+                    else:
+                        # 如果没有crossing_segment，使用轨迹的最近两点
+                        if len(recent_trajectory) >= 2:
+                            tracker.crossed_lines[cross_key] = ((recent_trajectory[-2], recent_trajectory[-1]), cross_direction)
+                    tracker.is_crossed = True
+                    print(f"    [绊线穿越] task={task_id} track={tracker.track_id} line={region_id} dir={cross_direction} -> 累计 {self.line_crossing_counts[task_id][region_id]}")
             
             crossing_results[region_id] = {
-                'region_name': region.get('name', region_id),
-                'count': self.task_accumulators[task_id][region_id],
-                'direction': direction
+                'region_name': region_name,
+                'count': self.line_crossing_counts[task_id][region_id],
+                'direction': direction,
+                'points': [p1, p2]
             }
         
         return crossing_results
     
     @staticmethod
+    def _iou(bbox1, bbox2):
+        x1 = max(bbox1[0], bbox2[0])
+        y1 = max(bbox1[1], bbox2[1])
+        x2 = min(bbox1[2], bbox2[2])
+        y2 = min(bbox1[3], bbox2[3])
+        if x2 < x1 or y2 < y1:
+            return 0.0
+        inter = (x2 - x1) * (y2 - y1)
+        area1 = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
+        area2 = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
+        union = area1 + area2 - inter
+        return inter / union if union > 0 else 0.0
+    
+    @staticmethod
+    def _center_distance(bbox1, bbox2):
+        c1 = ImprovedObjectTracker.get_center(bbox1)
+        c2 = ImprovedObjectTracker.get_center(bbox2)
+        return np.hypot(c1[0] - c2[0], c1[1] - c2[1])
+    
+    @staticmethod
     def _segments_intersect(p1, p2, p3, p4):
-        """判断两条线段是否相交"""
         def ccw(A, B, C):
             return (C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0])
-        
         return ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4)
     
     @staticmethod
     def _get_cross_direction(start, end, line_p1, line_p2):
-        """判断跨越方向"""
         def cross_product(o, a, b):
             return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
-        
         cp_start = cross_product(line_p1, line_p2, start)
         cp_end = cross_product(line_p1, line_p2, end)
-        
         if cp_start > 0 and cp_end < 0:
             return 'in'
-        elif cp_start < 0 and cp_end > 0:
+        if cp_start < 0 and cp_end > 0:
             return 'out'
-        
         return 'unknown'
 
 
@@ -697,9 +1203,9 @@ class BatchInferenceProcessor:
         line_crossing_results = None
         trackers = []
         
-        if TRACKER_MANAGER and detections:
+        if TRACKER_MANAGER:
             with TRACKER_LOCK:
-                trackers = TRACKER_MANAGER.update(detections)
+                trackers = TRACKER_MANAGER.update(task_id, detections)
         
         if algo_config and trackers:
             regions = algo_config.get('regions', [])
@@ -904,14 +1410,16 @@ def draw_stats(image, line_crossing_results, inference_time=0, total_time=0, tra
     if line_crossing_results:
         total_crossing_count = sum(info['count'] for info in line_crossing_results.values())
     
-    info_text.append("")
-    info_text.append("Line Crossing:")
-    info_text.append(f"  Total: {total_crossing_count}")  # 显示总穿越次数（青色高亮）
-    
-    # 显示每条线的穿越次数
-    if line_crossing_results:
-        for line_id, line_info in line_crossing_results.items():
-            info_text.append(f"  {line_info['region_name']}: {line_info['count']}")
+    if total_crossing_count > 0:
+        info_text.append("")
+        info_text.append("Line Crossing:")
+        info_text.append(f"  Total: {total_crossing_count}")  # 显示总穿越次数（青色高亮）
+        
+        # 显示每条线的穿越次数（仅显示 >0 的项目）
+        if line_crossing_results:
+            for line_id, line_info in line_crossing_results.items():
+                if line_info['count'] > 0:
+                    info_text.append(f"  {line_info['region_name']}: {line_info['count']}")
     
     y_offset = 20
     for text in info_text:
@@ -940,25 +1448,76 @@ def draw_stats(image, line_crossing_results, inference_time=0, total_time=0, tra
         y_offset += 25
 
 
-def get_or_create_video_writer(task_id, image_shape):
-    """获取或创建视频写入器（按task_id管理，同一task_id在服务运行期间使用同一个视频文件）"""
+def get_or_create_video_writer(task_id, image_shape, force_new=False):
+    """获取或创建视频写入器（按task_id管理，支持分段保存）"""
     global VIDEO_WRITERS, VIDEO_WRITERS_LOCK
+    
+    # 从配置中获取分段参数
+    segment_duration = CONFIG.get('video_segment_duration', 60)  # 默认1分钟
+    segment_max_size_mb = CONFIG.get('video_segment_max_size_mb', 500)  # 默认500MB
     
     if not CONFIG.get('enable_video_save', False):
         return None
     
     with VIDEO_WRITERS_LOCK:
-        if task_id in VIDEO_WRITERS:
-            return VIDEO_WRITERS[task_id]
+        current_time = time.time()
+        
+        # 检查是否需要创建新段
+        if task_id in VIDEO_WRITERS and not force_new:
+            video_info = VIDEO_WRITERS[task_id]
+            writer = video_info['writer']
+            video_path = video_info['path']
+            start_time = video_info['start_time']
+            frame_count = video_info.get('frame_count', 0)
+            
+            # 检查时长是否超过限制
+            duration = current_time - start_time
+            if duration >= segment_duration:
+                # 关闭当前写入器
+                writer.release()
+                print(f"  📹 视频片段时长达到限制，关闭: {video_path} (时长: {duration:.1f}秒)")
+                force_new = True
+            else:
+                # 检查文件大小是否超过限制
+                try:
+                    if video_path.exists():
+                        size_mb = video_path.stat().st_size / (1024 * 1024)
+                        if size_mb >= segment_max_size_mb:
+                            writer.release()
+                            print(f"  📹 视频片段大小达到限制，关闭: {video_path} (大小: {size_mb:.1f}MB)")
+                            force_new = True
+                except Exception as e:
+                    print(f"  ⚠️  检查视频文件大小失败: {e}")
+            
+            if not force_new:
+                # 更新帧计数
+                video_info['frame_count'] = frame_count + 1
+                return writer
         
         # 创建新的视频写入器
         video_dir = Path(CONFIG.get('video_save_dir', './videos'))
         video_dir.mkdir(parents=True, exist_ok=True)
         
-        # 生成视频文件名（包含task_id和启动时间戳，同一个task_id在整个服务运行期间使用同一个文件）
-        # 如果需要新的视频文件，重启服务即可
+        # 生成视频文件名（包含task_id和时间戳，支持分段）
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        video_filename = f"line_crossing_{task_id}_{timestamp}.mp4"
+        segment_index = 0
+        if task_id in VIDEO_WRITERS:
+            # 如果已有视频，查找下一个段索引
+            existing_files = list(video_dir.glob(f"line_crossing_{task_id}_*.mp4"))
+            if existing_files:
+                # 从文件名中提取段索引
+                indices = []
+                for f in existing_files:
+                    parts = f.stem.split('_')
+                    if len(parts) >= 4:
+                        try:
+                            idx = int(parts[-1])
+                            indices.append(idx)
+                        except:
+                            pass
+                segment_index = max(indices) + 1 if indices else 0
+        
+        video_filename = f"line_crossing_{task_id}_{timestamp}_seg{segment_index:03d}.mp4"
         video_path = video_dir / video_filename
         
         height, width = image_shape[:2]
@@ -967,8 +1526,13 @@ def get_or_create_video_writer(task_id, image_shape):
         video_writer = cv2.VideoWriter(str(video_path), fourcc, fps, (width, height))
         
         if video_writer.isOpened():
-            VIDEO_WRITERS[task_id] = video_writer
-            print(f"  📹 创建视频写入器: {video_path} (task_id={task_id})")
+            VIDEO_WRITERS[task_id] = {
+                'writer': video_writer,
+                'path': video_path,
+                'start_time': current_time,
+                'frame_count': 0
+            }
+            print(f"  📹 创建视频写入器: {video_path} (task_id={task_id}, 段索引: {segment_index})")
             return video_writer
         else:
             print(f"  ⚠️  无法创建视频写入器: {video_path}")
@@ -1053,12 +1617,21 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
     
     def do_GET(self):
         """处理GET请求"""
+        # 调试信息：打印请求路径
+        print(f"[DEBUG] GET请求路径: {self.path}")
+        
         if self.path == '/health':
             self.handle_health()
         elif self.path == '/':
             self.handle_index()
         elif self.path == '/stats':
             self.handle_stats()
+        elif self.path == '/videos' or self.path == '/videos/':
+            self.handle_video_list()
+        elif self.path.startswith('/videos/'):
+            self.handle_video_download()
+        elif self.path == '/api/writing-videos':
+            self.handle_writing_videos()
         else:
             self.send_error(404, "Not Found")
     
@@ -1216,6 +1789,20 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
                     <p><strong>健康检查:</strong> <code>GET /health</code></p>
                     <p><strong>统计信息:</strong> <code>GET /stats</code></p>
                     <p><strong>清零统计:</strong> <code>POST /reset_stats</code></p>
+                    <p><strong>视频列表:</strong> <code>GET /videos</code></p>
+                    <p><strong>视频下载:</strong> <code>GET /videos/文件名.mp4</code></p>
+                </div>
+                
+                <div class="stats-section" id="video-section" style="background: #e8f5e9; border: 2px solid #4CAF50;">
+                    <h2>📹 视频下载</h2>
+                    <div id="video-list-container">
+                        <p style="color: #666;">正在加载视频列表...</p>
+                    </div>
+                    <p style="margin-top: 15px;">
+                        <a href="/videos" style="color: #2196F3; text-decoration: none; font-weight: bold; font-size: 16px;">
+                            📋 查看完整视频列表 →
+                        </a>
+                    </p>
                 </div>
             </div>
 
@@ -1270,9 +1857,69 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
                     }}, 3000);
                 }}
 
+                // 加载视频列表
+                function loadVideos() {{
+                    fetch('/videos')
+                        .then(res => res.text())
+                        .then(html => {{
+                            // 解析HTML获取视频列表
+                            const parser = new DOMParser();
+                            const doc = parser.parseFromString(html, 'text/html');
+                            const table = doc.querySelector('table');
+                            const container = document.getElementById('video-list-container');
+                            
+                            if (table) {{
+                                // 提取视频信息
+                                const rows = table.querySelectorAll('tbody tr');
+                                if (rows.length > 0) {{
+                                    let videoHtml = '<table style="width: 100%; border-collapse: collapse; margin: 10px 0;">';
+                                    videoHtml += '<thead><tr><th style="padding: 8px; text-align: left; border-bottom: 1px solid #ddd;">文件名</th><th style="padding: 8px; text-align: left; border-bottom: 1px solid #ddd;">大小</th><th style="padding: 8px; text-align: left; border-bottom: 1px solid #ddd;">操作</th></tr></thead><tbody>';
+                                    
+                                    rows.forEach((row, index) => {{
+                                        if (index < 5) {{ // 只显示最近5个视频
+                                            const cells = row.querySelectorAll('td');
+                                            const filename = cells[0].textContent;
+                                            const size = cells[1].textContent;
+                                            const downloadUrl = cells[3].querySelector('a').href;
+                                            
+                                            videoHtml += `<tr style="border-bottom: 1px solid #eee;">
+                                                <td style="padding: 8px;">${{filename}}</td>
+                                                <td style="padding: 8px;">${{size}}</td>
+                                                <td style="padding: 8px;">
+                                                    <a href="${{downloadUrl}}" style="background: #4CAF50; color: white; padding: 6px 12px; border-radius: 4px; text-decoration: none; display: inline-block;" download>⬇️ 下载</a>
+                                                </td>
+                                            </tr>`;
+                                        }}
+                                    }});
+                                    
+                                    videoHtml += '</tbody></table>';
+                                    if (rows.length > 5) {{
+                                        videoHtml += `<p style="color: #666; font-size: 14px; margin-top: 10px;">显示最近5个视频，共 ${{rows.length}} 个视频</p>`;
+                                    }}
+                                    container.innerHTML = videoHtml;
+                                }} else {{
+                                    container.innerHTML = '<p style="color: #666;">暂无视频文件</p>';
+                                }}
+                            }} else {{
+                                const message = doc.querySelector('.message');
+                                if (message && message.textContent.includes('未启用')) {{
+                                    container.innerHTML = '<p style="color: #856404; padding: 10px; background: #fff3cd; border-radius: 5px;">⚠️ 视频保存功能未启用，请使用 <code>--enable-video-save</code> 参数启动服务</p>';
+                                }} else {{
+                                    container.innerHTML = '<p style="color: #666;">暂无视频文件</p>';
+                                }}
+                            }}
+                        }})
+                        .catch(err => {{
+                            console.error('加载视频列表失败:', err);
+                            document.getElementById('video-list-container').innerHTML = '<p style="color: #f44336;">加载视频列表失败</p>';
+                        }});
+                }}
+                
                 // 初始加载和定时刷新
                 loadStats();
-                setInterval(loadStats, 3000);  // 每3秒刷新一次
+                loadVideos();
+                setInterval(loadStats, 3000);  // 每3秒刷新一次统计
+                setInterval(loadVideos, 10000);  // 每10秒刷新一次视频列表
             </script>
         </body>
         </html>
@@ -1332,6 +1979,258 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
             'message': '统计数据已清零'
         }
         self.wfile.write(json.dumps(response).encode('utf-8'))
+    
+    def handle_video_list(self):
+        """处理视频列表请求"""
+        try:
+            video_dir = Path(CONFIG.get('video_save_dir', './videos'))
+            
+            # 检查是否启用视频保存
+            if not CONFIG.get('enable_video_save', False):
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html; charset=utf-8')
+                self.end_headers()
+                html = """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>视频列表 - {}</title>
+                <meta charset="utf-8">
+                <style>
+                    body {{ font-family: Arial, sans-serif; max-width: 900px; margin: 50px auto; padding: 20px; }}
+                    .container {{ background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+                    .message {{ padding: 20px; background: #fff3cd; border-radius: 5px; color: #856404; }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>📹 视频列表</h1>
+                    <div class="message">
+                        <p>⚠️ 视频保存功能未启用</p>
+                        <p>请使用 <code>--enable-video-save</code> 参数启动服务以启用视频保存功能。</p>
+                    </div>
+                    <p><a href="/">← 返回首页</a></p>
+                </div>
+            </body>
+            </html>
+            """.format(CONFIG['name'])
+                self.wfile.write(html.encode('utf-8'))
+                return
+            
+            # 获取所有视频文件
+            video_files = []
+            if video_dir.exists():
+                for video_file in sorted(video_dir.glob('*.mp4'), key=lambda x: x.stat().st_mtime, reverse=True):
+                    try:
+                        stat = video_file.stat()
+                        size_mb = stat.st_size / (1024 * 1024)
+                        mtime = datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                        video_files.append({
+                            'filename': video_file.name,
+                            'size_mb': round(size_mb, 2),
+                            'modified_time': mtime
+                        })
+                    except Exception as e:
+                        print(f"处理视频文件 {video_file} 时出错: {e}")
+                        continue
+            
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.end_headers()
+            
+            html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>视频列表 - {CONFIG['name']}</title>
+            <meta charset="utf-8">
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    max-width: 1000px;
+                    margin: 50px auto;
+                    padding: 20px;
+                    background: #f5f5f5;
+                }}
+                .container {{
+                    background: white;
+                    padding: 30px;
+                    border-radius: 10px;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                }}
+                h1 {{
+                    color: #333;
+                    border-bottom: 3px solid #2196F3;
+                    padding-bottom: 10px;
+                }}
+                table {{
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin: 20px 0;
+                }}
+                th, td {{
+                    padding: 12px;
+                    text-align: left;
+                    border-bottom: 1px solid #ddd;
+                }}
+                th {{
+                    background: #f9f9f9;
+                    font-weight: bold;
+                    color: #333;
+                }}
+                tr:hover {{
+                    background: #f5f5f5;
+                }}
+                .btn-download {{
+                    background: #4CAF50;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    text-decoration: none;
+                    display: inline-block;
+                }}
+                .btn-download:hover {{
+                    background: #45a049;
+                }}
+                .empty {{
+                    padding: 20px;
+                    text-align: center;
+                    color: #666;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>📹 视频列表</h1>
+                <p><a href="/">← 返回首页</a></p>
+        """
+        
+            if video_files:
+                html += """
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>文件名</th>
+                                <th>大小</th>
+                                <th>修改时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                """
+                for video in video_files:
+                    html += f"""
+                            <tr>
+                                <td>{video['filename']}</td>
+                                <td>{video['size_mb']} MB</td>
+                                <td>{video['modified_time']}</td>
+                                <td>
+                                    <a href="/videos/{video['filename']}" class="btn-download" download>下载</a>
+                                </td>
+                            </tr>
+                    """
+                html += """
+                        </tbody>
+                    </table>
+                """
+            else:
+                html += """
+                    <div class="empty">
+                        <p>暂无视频文件</p>
+                    </div>
+                """
+            
+            html += """
+            </div>
+        </body>
+        </html>
+            """
+            self.wfile.write(html.encode('utf-8'))
+        except Exception as e:
+            print(f"处理视频列表请求时出错: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            self.send_error(500, f"Internal server error: {str(e)}")
+    
+    def handle_writing_videos(self):
+        """返回正在写入的视频列表API"""
+        global VIDEO_WRITERS, VIDEO_WRITERS_LOCK
+        
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        
+        writing_videos = []
+        with VIDEO_WRITERS_LOCK:
+            for task_id, video_info in VIDEO_WRITERS.items():
+                if isinstance(video_info, dict) and 'path' in video_info:
+                    video_path = video_info['path']
+                    if video_path.exists():
+                        writing_videos.append(str(video_path.resolve()))
+        
+        response = {'videos': writing_videos}
+        self.wfile.write(json.dumps(response).encode('utf-8'))
+    
+    def handle_video_download(self):
+        """处理视频下载请求"""
+        # 从路径中提取文件名
+        filename = self.path.replace('/videos/', '')
+        # 安全检查：防止路径遍历攻击
+        if '..' in filename or '/' in filename or '\\' in filename:
+            self.send_error(400, "Invalid filename")
+            return
+        
+        video_dir = Path(CONFIG.get('video_save_dir', './videos'))
+        video_path = video_dir / filename
+        
+        # 检查文件是否存在
+        if not video_path.exists() or not video_path.is_file():
+            self.send_error(404, "Video not found")
+            return
+        
+        # 检查文件扩展名
+        if not filename.lower().endswith('.mp4'):
+            self.send_error(400, "Invalid file type")
+            return
+        
+        # 检查是否正在写入
+        global VIDEO_WRITERS, VIDEO_WRITERS_LOCK
+        is_writing = False
+        video_path_str = str(video_path.resolve())
+        with VIDEO_WRITERS_LOCK:
+            for task_id, video_info in VIDEO_WRITERS.items():
+                if isinstance(video_info, dict) and 'path' in video_info:
+                    if str(video_info['path'].resolve()) == video_path_str:
+                        is_writing = True
+                        break
+        
+        if is_writing:
+            self.send_error(409, "Video is being written")
+            return
+        
+        try:
+            # 读取文件并发送
+            file_size = video_path.stat().st_size
+            
+            self.send_response(200)
+            self.send_header('Content-type', 'video/mp4')
+            self.send_header('Content-Length', str(file_size))
+            self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
+            self.end_headers()
+            
+            # 分块读取并发送文件（避免大文件占用内存）
+            with open(video_path, 'rb') as f:
+                while True:
+                    chunk = f.read(8192)  # 8KB chunks
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+            
+        except Exception as e:
+            print(f"视频下载错误: {str(e)}")
+            self.send_error(500, "Internal server error")
     
     def handle_inference(self):
         """处理推理请求（绊线检测专用，单线程直接推理，避免ACL跨线程问题）"""
@@ -1438,9 +2337,9 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
             line_crossing_results = {}
             trackers = []
             
-            if TRACKER_MANAGER and detections:
+            if TRACKER_MANAGER:
                 with TRACKER_LOCK:
-                    trackers = TRACKER_MANAGER.update(detections)
+                    trackers = TRACKER_MANAGER.update(task_id, detections)
             
             if algo_config and trackers:
                 regions = algo_config.get('regions', [])
@@ -1498,7 +2397,7 @@ class YOLOInferenceHandler(BaseHTTPRequestHandler):
                     video_frame = image.copy()
                     image_size = (image.shape[1], image.shape[0])
                     
-                    # 获取或创建视频写入器
+                    # 获取或创建视频写入器（自动分段）
                     video_writer = get_or_create_video_writer(task_id, image.shape)
                     
                     if video_writer:
@@ -1622,13 +2521,13 @@ def register_service(quiet=False):
                     if not quiet:
                         print(f"  检测到本地IP: {local_ip}")
                 else:
-                    # 默认使用127.0.0.1
-                    endpoint = f"http://127.0.0.1:{CONFIG['port']}/infer"
+                    # 默认使用172.16.5.207
+                    endpoint = f"http://172.16.5.207:{CONFIG['port']}/infer"
             except Exception as e:
-                # 默认使用127.0.0.1
-                endpoint = f"http://127.0.0.1:{CONFIG['port']}/infer"
+                # 默认使用172.16.5.207
+                endpoint = f"http://172.16.5.207:{CONFIG['port']}/infer"
                 if not quiet:
-                    print(f"  警告: 无法自动获取本地IP ({str(e)}), 使用127.0.0.1")
+                    print(f"  警告: 无法自动获取本地IP ({str(e)}), 使用172.16.5.207")
     
     payload = {
         'service_id': CONFIG['service_id'],
@@ -1800,7 +2699,7 @@ def main():
                         help='监听端口 (默认: 7903)')
     parser.add_argument('--host', default='0.0.0.0',
                         help='监听地址 (默认: 0.0.0.0)')
-    parser.add_argument('--easydarwin', default='127.0.0.1:5066',
+    parser.add_argument('--easydarwin', default='172.16.5.207:5066',
                         help='EasyDarwin地址')
     parser.add_argument('--model', default='./weight/best.om',
                         help='OM模型路径 (默认: ./weight/best.om)')
@@ -1824,6 +2723,10 @@ def main():
                         help='视频保存目录 (默认: ./videos)')
     parser.add_argument('--video-fps', type=int, default=25,
                         help='视频帧率 (默认: 25)')
+    parser.add_argument('--video-segment-duration', type=int, default=60,
+                        help='每个视频片段时长（秒）(默认: 60秒，即1分钟)')
+    parser.add_argument('--video-segment-max-size-mb', type=int, default=500,
+                        help='每个视频片段最大大小（MB）(默认: 500MB)')
     
     args = parser.parse_args()
     
@@ -1850,6 +2753,8 @@ def main():
     CONFIG['enable_video_save'] = args.enable_video_save
     CONFIG['video_save_dir'] = args.video_save_dir
     CONFIG['video_fps'] = args.video_fps
+    CONFIG['video_segment_duration'] = args.video_segment_duration
+    CONFIG['video_segment_max_size_mb'] = args.video_segment_max_size_mb
     
     # 如果启用视频保存，确保目录存在
     if CONFIG['enable_video_save']:
@@ -1868,8 +2773,13 @@ def main():
     # 加载模型
     load_model()
     
-    # 初始化跟踪器管理器
-    TRACKER_MANAGER = TrackerManager(iou_threshold=0.3, max_age=30)
+    # 初始化跟踪器管理器（优化参数：平衡跟踪稳定性和匹配准确性）
+    TRACKER_MANAGER = TrackerManager(
+        iou_threshold=0.05,      # 极低IOU阈值，最大容忍遮挡
+        max_missed=10,           # 进一步增加最大丢失帧数，减少轨迹丢失
+        center_distance=200,    # 适度降低中心距离阈值，避免误匹配
+        frame_step=1
+    )
     print("✓ 跟踪器管理器已初始化")
     
     # 不再使用批处理（改为单线程直接推理，避免ACL跨线程问题）
@@ -1918,10 +2828,15 @@ def main():
         try:
             global VIDEO_WRITERS, VIDEO_WRITERS_LOCK
             with VIDEO_WRITERS_LOCK:
-                for task_id, video_writer in VIDEO_WRITERS.items():
+                for task_id, video_info in VIDEO_WRITERS.items():
                     try:
-                        video_writer.release()
-                        print(f"  ✓ 关闭视频写入器: task_id={task_id}")
+                        if isinstance(video_info, dict) and 'writer' in video_info:
+                            video_info['writer'].release()
+                            print(f"  ✓ 关闭视频写入器: task_id={task_id}, path={video_info.get('path')}")
+                        else:
+                            # 兼容旧格式
+                            video_info.release()
+                            print(f"  ✓ 关闭视频写入器: task_id={task_id}")
                     except Exception as e:
                         print(f"  ⚠️  关闭视频写入器失败 (task_id={task_id}): {e}")
                 VIDEO_WRITERS.clear()

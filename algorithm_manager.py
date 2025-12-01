@@ -108,28 +108,32 @@ HTML_TEMPLATE = '''
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
-            padding: 12px;
+            padding: 16px;
+            line-height: 1.5;
         }
         .container {
-            max-width: 1400px;
+            max-width: 1600px;
             margin: 0 auto;
         }
         .header {
-            background: white;
-            border-radius: 10px;
-            padding: 16px 20px;
-            margin-bottom: 12px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin-bottom: 16px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.1), 0 2px 6px rgba(0,0,0,0.06);
+            border: 1px solid rgba(255,255,255,0.8);
         }
         .header h1 {
-            color: #2d3748;
-            margin-bottom: 4px;
-            font-size: 24px;
-            font-weight: 700;
+            color: #1a202c;
+            margin-bottom: 6px;
+            font-size: 28px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
         }
         .header p {
-            color: #718096;
-            font-size: 13px;
+            color: #64748b;
+            font-size: 14px;
+            font-weight: 500;
         }
         .grid {
             display: grid;
@@ -137,49 +141,75 @@ HTML_TEMPLATE = '''
             gap: 12px;
             margin-bottom: 12px;
         }
-        .main-layout {
-            display: grid;
-            grid-template-columns: 350px 1fr;
-            gap: 12px;
-            margin-bottom: 12px;
+        .gpu-layout {
+            margin-bottom: 16px;
         }
-        @media (max-width: 1000px) {
-            .main-layout {
+        .gpu-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 12px;
+        }
+        .services-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        @media (max-width: 1400px) {
+            .services-layout {
                 grid-template-columns: 1fr;
             }
         }
         .card {
             background: white;
-            border-radius: 10px;
-            padding: 16px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            border-radius: 12px;
+            padding: 18px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.04);
+            border: 1px solid rgba(226, 232, 240, 0.8);
+            transition: all 0.3s ease;
+        }
+        .card:hover {
+            box-shadow: 0 4px 20px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.06);
+            transform: translateY(-1px);
         }
         .card-title {
             font-size: 16px;
-            font-weight: 600;
-            color: #2d3748;
-            margin-bottom: 12px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid #e2e8f0;
+            font-weight: 700;
+            color: #1a202c;
+            margin-bottom: 14px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #e2e8f0;
             display: flex;
             align-items: center;
             justify-content: space-between;
         }
         .status-badge {
             display: inline-block;
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: 600;
-            margin-left: 8px;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 700;
+            margin-left: 12px;
+            letter-spacing: 0.3px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         }
-        .status-running { background: #48bb78; color: white; }
-        .status-stopped { background: #cbd5e0; color: #4a5568; }
+        .status-running { 
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+            color: white;
+        }
+        .status-stopped { 
+            background: linear-gradient(135deg, #cbd5e0 0%, #a0aec0 100%);
+            color: #4a5568;
+        }
         .form-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 10px 12px;
-            margin-bottom: 12px;
+            gap: 12px 16px;
+            margin-bottom: 16px;
+            padding: 16px;
+            background: #f8fafc;
+            border-radius: 10px;
+            border: 1px solid #e2e8f0;
         }
         .form-group {
             margin-bottom: 0;
@@ -189,89 +219,192 @@ HTML_TEMPLATE = '''
         }
         .form-group label {
             display: block;
-            color: #4a5568;
-            font-weight: 500;
-            margin-bottom: 5px;
+            color: #334155;
+            font-weight: 600;
+            margin-bottom: 6px;
             font-size: 12px;
+            letter-spacing: 0.1px;
         }
         .form-group input, .form-group select {
             width: 100%;
-            padding: 8px 10px;
-            border: 1.5px solid #e2e8f0;
-            border-radius: 6px;
+            padding: 10px 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
             font-size: 13px;
-            transition: border-color 0.2s;
+            transition: all 0.2s ease;
+            background: white;
+            color: #1a202c;
         }
         .form-group input:focus, .form-group select:focus {
             outline: none;
             border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            transform: translateY(-1px);
+        }
+        .form-group input:hover, .form-group select:hover {
+            border-color: #cbd5e0;
+        }
+        select:hover {
+            border-color: #cbd5e0 !important;
+        }
+        select:focus {
+            border-color: #667eea !important;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1) !important;
+            outline: none !important;
+        }
+        .form-group small {
+            display: block;
+            margin-top: 6px;
+            color: #64748b;
+            font-size: 11px;
+            line-height: 1.4;
         }
         .btn-group {
             display: flex;
-            gap: 8px;
-            margin-top: 12px;
+            gap: 10px;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 2px solid #e2e8f0;
         }
         .btn {
-            padding: 8px 16px;
+            padding: 12px 24px;
             border: none;
-            border-radius: 6px;
+            border-radius: 8px;
             font-size: 13px;
-            font-weight: 600;
+            font-weight: 700;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.3s ease;
+            letter-spacing: 0.2px;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.12);
+            position: relative;
+            overflow: hidden;
+            flex: 1;
+        }
+        .btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+        .btn:hover::before {
+            width: 300px;
+            height: 300px;
         }
         .btn-primary {
-            background: #667eea;
+            background: linear-gradient(135deg, #667eea 0%, #5568d3 100%);
             color: white;
         }
-        .btn-primary:hover { background: #5568d3; }
+        .btn-primary:hover { 
+            background: linear-gradient(135deg, #5568d3 0%, #4c51bf 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
         .btn-danger {
-            background: #f56565;
+            background: linear-gradient(135deg, #f56565 0%, #e53e3e 100%);
             color: white;
         }
-        .btn-danger:hover { background: #e53e3e; }
+        .btn-danger:hover { 
+            background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(245, 101, 101, 0.4);
+        }
         .btn-success {
-            background: #48bb78;
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
             color: white;
         }
-        .btn-success:hover { background: #38a169; }
+        .btn-success:hover { 
+            background: linear-gradient(135deg, #38a169 0%, #2f855a 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(72, 187, 120, 0.4);
+        }
+        .btn:active {
+            transform: translateY(0);
+        }
         .btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
+            transform: none !important;
         }
         .gpu-card {
-            background: #f7fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: 6px;
-            padding: 8px;
-            margin-bottom: 6px;
+            background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 14px;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            position: relative;
+            overflow: hidden;
+        }
+        .gpu-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #48bb78 0%, #38a169 100%);
+        }
+        .gpu-card.warning::before {
+            background: linear-gradient(90deg, #ed8936 0%, #dd6b20 100%);
+        }
+        .gpu-card.danger::before {
+            background: linear-gradient(90deg, #f56565 0%, #e53e3e 100%);
+        }
+        .gpu-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 4px 16px rgba(102, 126, 234, 0.2);
+            transform: translateY(-2px);
         }
         .gpu-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 6px;
+            margin-bottom: 10px;
         }
         .gpu-name {
-            font-weight: 600;
-            color: #2d3748;
-            font-size: 12px;
+            font-weight: 800;
+            color: #1a202c;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }
-        .gpu-id {
-            background: #667eea;
+        .gpu-usage-badge {
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
             color: white;
-            padding: 2px 8px;
-            border-radius: 8px;
-            font-size: 10px;
-            font-weight: 600;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 800;
+            box-shadow: 0 2px 8px rgba(72, 187, 120, 0.3);
+            min-width: 50px;
+            text-align: center;
+        }
+        .gpu-usage-badge.warning {
+            background: linear-gradient(135deg, #ed8936 0%, #dd6b20 100%);
+            box-shadow: 0 2px 8px rgba(237, 137, 54, 0.3);
+        }
+        .gpu-usage-badge.danger {
+            background: linear-gradient(135deg, #f56565 0%, #e53e3e 100%);
+            box-shadow: 0 2px 8px rgba(245, 101, 101, 0.3);
+        }
+        .gpu-progress {
+            margin-bottom: 12px;
         }
         .progress-bar {
             width: 100%;
-            height: 16px;
+            height: 20px;
             background: #e2e8f0;
-            border-radius: 8px;
+            border-radius: 10px;
             overflow: hidden;
-            margin-bottom: 6px;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+            position: relative;
         }
         .progress-fill {
             height: 100%;
@@ -280,41 +413,72 @@ HTML_TEMPLATE = '''
             align-items: center;
             justify-content: center;
             color: white;
-            font-size: 10px;
-            font-weight: 600;
-            transition: width 0.3s;
+            font-size: 11px;
+            font-weight: 700;
+            transition: width 0.5s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .progress-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            animation: shimmer 2s infinite;
+        }
+        @keyframes shimmer {
+            0% { left: -100%; }
+            100% { left: 100%; }
         }
         .progress-fill.warning { background: linear-gradient(90deg, #ed8936 0%, #dd6b20 100%); }
         .progress-fill.danger { background: linear-gradient(90deg, #f56565 0%, #e53e3e 100%); }
         .gpu-info {
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 4px 6px;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            font-size: 11px;
+        }
+        .gpu-info-item {
+            background: #f1f5f9;
+            border-radius: 8px;
+            padding: 8px 10px;
+            text-align: center;
+            border: 1px solid #e2e8f0;
+        }
+        .gpu-info-label {
+            font-weight: 600;
             font-size: 10px;
-            color: #4a5568;
+            color: #64748b;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
-        .info-item {
-            display: flex;
-            justify-content: space-between;
+        .gpu-info-value {
+            font-weight: 800;
+            color: #1a202c;
+            font-size: 13px;
         }
-        .info-label { font-weight: 500; font-size: 11px; }
-        .info-value { font-weight: 600; color: #2d3748; font-size: 12px; }
         .instances-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
             gap: 10px;
-            margin-top: 8px;
+            margin-top: 0;
         }
         .instance-card {
-            background: #f7fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: 6px;
-            padding: 10px;
-            transition: all 0.2s;
+            background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 16px;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
         }
         .instance-card:hover {
             border-color: #667eea;
-            box-shadow: 0 2px 4px rgba(102, 126, 234, 0.1);
+            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.2), 0 4px 12px rgba(0,0,0,0.08);
+            transform: translateY(-4px);
         }
         .instance-header {
             display: flex;
@@ -364,15 +528,31 @@ HTML_TEMPLATE = '''
             margin-top: 4px;
         }
         .log-container {
-            background: #1a202c;
+            background: linear-gradient(135deg, #1a202c 0%, #2d3748 100%);
             color: #e2e8f0;
-            padding: 12px;
-            border-radius: 6px;
+            padding: 20px;
+            border-radius: 12px;
             font-family: 'Courier New', monospace;
-            font-size: 11px;
-            max-height: 350px;
+            font-size: 12px;
+            max-height: 400px;
             overflow-y: auto;
-            line-height: 1.6;
+            line-height: 1.8;
+            border: 1px solid #4a5568;
+            box-shadow: inset 0 2px 8px rgba(0,0,0,0.3);
+        }
+        .log-container::-webkit-scrollbar {
+            width: 8px;
+        }
+        .log-container::-webkit-scrollbar-track {
+            background: #2d3748;
+            border-radius: 4px;
+        }
+        .log-container::-webkit-scrollbar-thumb {
+            background: #4a5568;
+            border-radius: 4px;
+        }
+        .log-container::-webkit-scrollbar-thumb:hover {
+            background: #718096;
         }
         .log-container div {
             padding: 2px 0;
@@ -394,30 +574,50 @@ HTML_TEMPLATE = '''
             border-left-color: #48bb78 !important;
         }
         .service-info {
-            background: #f7fafc;
-            padding: 10px 12px;
-            border-radius: 6px;
-            margin-bottom: 12px;
+            background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+            padding: 12px 16px;
+            border-radius: 10px;
+            margin-bottom: 14px;
             font-size: 12px;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.04);
         }
         .service-info-item {
             display: flex;
             justify-content: space-between;
-            padding: 6px 0;
+            align-items: center;
+            padding: 10px 0;
             border-bottom: 1px solid #e2e8f0;
         }
         .service-info-item:last-child { border-bottom: none; }
-        .refresh-btn {
-            background: #4299e1;
-            color: white;
-            padding: 5px 12px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 11px;
-            font-weight: 600;
+        .service-info-item span {
+            color: #64748b;
+            font-weight: 500;
         }
-        .refresh-btn:hover { background: #3182ce; }
+        .service-info-item strong {
+            color: #1a202c;
+            font-weight: 700;
+        }
+        .refresh-btn {
+            background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%);
+            color: white;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 700;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 8px rgba(66, 153, 225, 0.3);
+        }
+        .refresh-btn:hover { 
+            background: linear-gradient(135deg, #3182ce 0%, #2c5282 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(66, 153, 225, 0.4);
+        }
+        .refresh-btn:active {
+            transform: translateY(0);
+        }
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
@@ -428,70 +628,109 @@ HTML_TEMPLATE = '''
         }
         .chart-container {
             background: white;
-            border-radius: 10px;
+            border-radius: 12px;
             padding: 16px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-            margin-bottom: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.04);
+            margin-bottom: 16px;
+            border: 1px solid #e2e8f0;
         }
         .chart-wrapper {
             position: relative;
-            height: 300px;
+            height: 240px;
             margin-top: 12px;
         }
         .stats-card {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 8px;
+            border-radius: 12px;
             padding: 16px;
-            margin-bottom: 12px;
+            margin-bottom: 16px;
             color: white;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 16px rgba(102, 126, 234, 0.25), 0 2px 8px rgba(0,0,0,0.12);
+            border: 1px solid rgba(255,255,255,0.2);
+            position: relative;
+            overflow: hidden;
+        }
+        .stats-card::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+            animation: pulse 4s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 0.5; }
+            50% { transform: scale(1.1); opacity: 0.8; }
         }
         .stats-card h3 {
-            margin: 0 0 12px 0;
+            margin: 0 0 14px 0;
             font-size: 14px;
-            font-weight: 600;
-            opacity: 0.9;
+            font-weight: 700;
+            opacity: 0.95;
+            position: relative;
+            z-index: 1;
         }
         .stats-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 16px;
+            gap: 12px;
+            position: relative;
+            z-index: 1;
         }
         .stat-item {
             text-align: center;
+            padding: 10px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
         }
         .stat-label {
             font-size: 11px;
-            opacity: 0.8;
-            margin-bottom: 6px;
-            font-weight: 500;
+            opacity: 0.9;
+            margin-bottom: 8px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
         }
         .stat-value {
-            font-size: 24px;
-            font-weight: 700;
+            font-size: 26px;
+            font-weight: 800;
+            text-shadow: 0 2px 6px rgba(0,0,0,0.2);
         }
         .service-card {
             background: white;
-            border-radius: 10px;
-            padding: 16px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-            margin-bottom: 12px;
+            border-radius: 14px;
+            padding: 20px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.08), 0 1px 4px rgba(0,0,0,0.04);
+            margin-bottom: 0;
+            border: 1px solid rgba(226, 232, 240, 0.8);
+            transition: all 0.3s ease;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+        .service-card:hover {
+            box-shadow: 0 6px 24px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06);
+            transform: translateY(-2px);
         }
         .service-card-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 16px;
-            padding-bottom: 12px;
+            padding-bottom: 14px;
             border-bottom: 2px solid #e2e8f0;
         }
         .service-card-title {
             font-size: 18px;
-            font-weight: 700;
-            color: #2d3748;
+            font-weight: 800;
+            color: #1a202c;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
+            letter-spacing: -0.2px;
         }
     </style>
 </head>
@@ -502,18 +741,20 @@ HTML_TEMPLATE = '''
             <p>管理和监控 YOLOv11x 人头检测算法服务</p>
         </div>
 
-        <!-- GPU监控和服务管理左右分布 -->
-        <div class="main-layout">
-            <!-- GPU监控 -->
-            <div class="card">
-                <div class="card-title">
+        <!-- GPU监控 -->
+        <div class="gpu-layout">
+            <div class="card" style="padding: 16px;">
+                <div class="card-title" style="margin-bottom: 12px; padding-bottom: 10px;">
                     <span>💻 GPU 监控</span>
-                    <button class="refresh-btn" onclick="loadGPUInfo()">🔄</button>
+                    <button class="refresh-btn" onclick="loadGPUInfo()" style="padding: 6px 12px; font-size: 11px;">🔄 刷新</button>
                 </div>
-                <div id="gpu-info" style="max-height:600px;overflow-y:auto;">加载中...</div>
+                <div id="gpu-info" class="gpu-grid">加载中...</div>
             </div>
+        </div>
 
-            <!-- 服务管理（仅实时检测） -->
+        <!-- 服务管理（实时检测和绊线统计同级） -->
+        <div class="services-layout">
+            <!-- 实时检测服务 -->
             <div class="service-card">
                 <div class="service-card-header">
                     <div class="service-card-title">
@@ -583,11 +824,11 @@ HTML_TEMPLATE = '''
                     </div>
                     <div class="form-group">
                         <label>推理端点IP</label>
-                        <input type="text" id="realtime-infer-ip-input" value="127.0.0.1" placeholder="例如: 127.0.0.1">
+                        <input type="text" id="realtime-infer-ip-input" value="172.16.5.207" placeholder="例如: 172.16.5.207">
                     </div>
                     <div class="form-group full-width">
                         <label>EasyDarwin地址</label>
-                        <input type="text" id="realtime-easydarwin-input" value="127.0.0.1:5066" placeholder="例如: 127.0.0.1:5066 或 http://127.0.0.1:5066">
+                        <input type="text" id="realtime-easydarwin-input" value="172.16.5.207:5066" placeholder="例如: 172.16.5.207:5066 或 http://172.16.5.207:5066">
                     </div>
                 </div>
                 
@@ -596,15 +837,14 @@ HTML_TEMPLATE = '''
                     <button class="btn btn-danger" onclick="stopService('realtime')">⏹️ 停止全部实例</button>
                 </div>
 
-                <div style="margin-top:12px;padding-top:12px;border-top:1px solid #e2e8f0;">
-                    <div class="card-title" style="border:none;padding:0;margin:0 0 8px 0;font-size:14px;">📋 实例列表</div>
-                    <div id="realtime-instances" class="instances-grid">暂无实例</div>
+                <div style="margin-top:12px;padding-top:12px;border-top:2px solid #e2e8f0;flex-grow:1;display:flex;flex-direction:column;">
+                    <div class="card-title" style="border:none;padding:0;margin:0 0 10px 0;font-size:13px;">📋 实例列表</div>
+                    <div id="realtime-instances" class="instances-grid" style="flex-grow:1;">暂无实例</div>
                 </div>
             </div>
-        </div>
 
-        <!-- 绊线统计算法服务 -->
-        <div class="service-card">
+            <!-- 绊线统计算法服务 -->
+            <div class="service-card">
             <div class="service-card-header">
                 <div class="service-card-title">
                     🟢 绊线统计算法服务
@@ -675,16 +915,16 @@ HTML_TEMPLATE = '''
                     <input type="number" id="line_crossing-port-input" value="0" placeholder="0=自动分配">
                 </div>
                 <div class="form-group">
-                    <label>推理端点IP</label>
-                    <input type="text" id="line_crossing-infer-ip-input" value="127.0.0.1" placeholder="例如: 127.0.0.1">
+                        <label>推理端点IP</label>
+                        <input type="text" id="line_crossing-infer-ip-input" value="172.16.5.207" placeholder="例如: 172.16.5.207">
                 </div>
                 <div class="form-group">
                     <label>模型路径（可选，默认使用./weight/best.om）</label>
                     <input type="text" id="line_crossing-model-input" value="" placeholder="留空使用默认OM模型 ./weight/best.om">
                 </div>
                 <div class="form-group full-width">
-                    <label>EasyDarwin地址</label>
-                    <input type="text" id="line_crossing-easydarwin-input" value="127.0.0.1:5066" placeholder="例如: 127.0.0.1:5066 或 http://127.0.0.1:5066">
+                        <label>EasyDarwin地址</label>
+                        <input type="text" id="line_crossing-easydarwin-input" value="172.16.5.207:5066" placeholder="例如: 172.16.5.207:5066 或 http://172.16.5.207:5066">
                 </div>
                 <div class="form-group full-width" style="border-top: 1px solid #e2e8f0; padding-top: 12px; margin-top: 12px;">
                     <label style="font-weight: 600; color: #2d3748;">📹 视频保存配置</label>
@@ -701,6 +941,16 @@ HTML_TEMPLATE = '''
                     <label>视频帧率（FPS）</label>
                     <input type="number" id="line_crossing-video-fps-input" value="25" min="1" max="60">
                 </div>
+                <div class="form-group">
+                    <label>视频分段时长（秒）</label>
+                    <input type="number" id="line_crossing-video-segment-duration-input" value="60" min="10" max="3600" step="10">
+                    <small style="color: #718096; font-size: 11px; display: block; margin-top: 4px;">每个视频片段的最大时长，默认60秒（1分钟）</small>
+                </div>
+                <div class="form-group">
+                    <label>视频分段最大大小（MB）</label>
+                    <input type="number" id="line_crossing-video-segment-max-size-input" value="500" min="10" max="5000" step="10">
+                    <small style="color: #718096; font-size: 11px; display: block; margin-top: 4px;">每个视频片段的最大文件大小，默认500MB</small>
+                </div>
             </div>
             
             <div class="btn-group">
@@ -708,31 +958,44 @@ HTML_TEMPLATE = '''
                 <button class="btn btn-danger" onclick="stopService('line_crossing')">⏹️ 停止全部实例</button>
             </div>
 
-            <div style="margin-top:12px;padding-top:12px;border-top:1px solid #e2e8f0;">
-                <div class="card-title" style="border:none;padding:0;margin:0 0 8px 0;font-size:14px;">📋 实例列表</div>
-                <div id="line_crossing-instances" class="instances-grid">暂无实例</div>
+            <div style="margin-top:12px;padding-top:12px;border-top:2px solid #e2e8f0;flex-grow:1;display:flex;flex-direction:column;">
+                <div class="card-title" style="border:none;padding:0;margin:0 0 10px 0;font-size:13px;">📋 实例列表</div>
+                <div id="line_crossing-instances" class="instances-grid" style="flex-grow:1;">暂无实例</div>
+            </div>
+        </div>
+
+        <!-- 视频下载 -->
+        <div class="service-card">
+            <div class="service-card-header">
+                <div class="service-card-title">
+                    📹 绊线视频下载
+                </div>
+            </div>
+            
+            <div id="video-list-container" style="min-height: 200px; padding: 8px;">
+                <p style="color: #64748b; text-align: center; padding: 40px; font-size: 14px; font-weight: 500;">正在加载视频列表...</p>
             </div>
         </div>
 
         <!-- 系统日志 -->
-        <div class="card">
+        <div class="card" style="margin-top: 16px;">
             <div class="card-title">
                 <span>📋 系统日志</span>
-                <div style="display:flex;gap:6px;align-items:center;">
-                    <select id="log-service" onchange="loadLogs()" style="padding: 5px 10px; border-radius: 5px; border: 1.5px solid #e2e8f0; font-size: 11px;">
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                    <select id="log-service" onchange="loadLogs()" style="padding: 10px 14px; border-radius: 8px; border: 2px solid #e2e8f0; font-size: 13px; font-weight: 600; background: white; color: #334155; cursor: pointer; transition: all 0.2s;">
                         <option value="all">全部日志</option>
                         <option value="manager">管理器日志</option>
                         <option value="realtime">实时检测日志</option>
                         <option value="line_crossing">绊线统计日志</option>
                     </select>
-                    <select id="log-lines" onchange="loadLogs()" style="padding: 5px 10px; border-radius: 5px; border: 1.5px solid #e2e8f0; font-size: 11px;">
+                    <select id="log-lines" onchange="loadLogs()" style="padding: 10px 14px; border-radius: 8px; border: 2px solid #e2e8f0; font-size: 13px; font-weight: 600; background: white; color: #334155; cursor: pointer; transition: all 0.2s;">
                         <option value="50">50行</option>
                         <option value="100" selected>100行</option>
                         <option value="200">200行</option>
                         <option value="500">500行</option>
                     </select>
                     <button class="refresh-btn" onclick="loadLogs()">🔄 刷新</button>
-                    <button class="refresh-btn" onclick="clearLogs()" style="background: #f56565;">🗑️ 清空</button>
+                    <button class="refresh-btn" onclick="clearLogs()" style="background: linear-gradient(135deg, #f56565 0%, #e53e3e 100%); box-shadow: 0 2px 8px rgba(245, 101, 101, 0.3);">🗑️ 清空</button>
                 </div>
             </div>
             <div class="log-container" id="logs">
@@ -744,7 +1007,9 @@ HTML_TEMPLATE = '''
     <script>
         // 自动刷新间隔（毫秒）
         const REFRESH_INTERVAL = 3000;
-        let autoRefresh = true;
+let autoRefresh = true;
+let gpuDataLoaded = false;
+let videoDataLoaded = false;
         
         // 图表对象
         const charts = {
@@ -877,6 +1142,175 @@ HTML_TEMPLATE = '''
             chart.update('none'); // 'none' 模式避免动画，提高性能
         }
 
+        // 通用请求工具，带超时控制
+        async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
+            const controller = new AbortController();
+            const id = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                const response = await fetch(url, { ...options, signal: controller.signal });
+                clearTimeout(id);
+                return response;
+            } catch (error) {
+                clearTimeout(id);
+                throw error;
+            }
+        }
+
+        // 加载视频列表
+        async function loadVideos() {
+        const container = document.getElementById('video-list-container');
+        if (!videoDataLoaded) {
+            container.innerHTML = '<p style="color: #64748b; padding: 20px; text-align: center;">正在加载视频列表...</p>';
+        }
+            try {
+                const response = await fetchWithTimeout('/api/videos', {}, 5000);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const data = await response.json();
+                
+                if (data.error) {
+                    container.innerHTML = `<p style="color: #f44336; padding: 20px; text-align: center;">${data.error}</p>`;
+                    return;
+                }
+                
+                if (!data.videos || data.videos.length === 0) {
+                    container.innerHTML = '<p style="color: #666; text-align: center; padding: 20px;">暂无视频文件</p>';
+                    return;
+                }
+                
+                videoDataLoaded = true;
+                
+                let html = `
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:10px;">
+                        <div style="color:#4a5568; font-size:12px;">共 ${data.videos.length} 个视频</div>
+                        <div style="display:flex; gap:8px;">
+                            <button class="refresh-btn" onclick="loadVideos()" style="padding:6px 12px; font-size:11px;">🔄 刷新</button>
+                            <button class="refresh-btn" onclick="deleteAllVideos()" style="padding:6px 12px; font-size:11px; background:linear-gradient(135deg,#f56565 0%,#e53e3e 100%); box-shadow:0 2px 8px rgba(245,101,101,0.3);">🗑️ 一键删除</button>
+                        </div>
+                    </div>
+                    <div style="overflow-x:auto;">
+                `;
+                
+                html += '<table style="width: 100%; border-collapse: collapse; min-width: 600px; font-size: 12px;">';
+                html += '<thead><tr style="background: #f7fafc; border-bottom: 2px solid #e2e8f0;">';
+                html += '<th style="padding: 10px; text-align: left; font-size: 12px; color: #4a5568;">文件名</th>';
+                html += '<th style="padding: 10px; text-align: left; font-size: 12px; color: #4a5568;">大小</th>';
+                html += '<th style="padding: 10px; text-align: left; font-size: 12px; color: #4a5568;">修改时间</th>';
+                html += '<th style="padding: 10px; text-align: left; font-size: 12px; color: #4a5568;">操作</th>';
+                html += '</tr></thead><tbody>';
+                
+                data.videos.forEach(video => {
+                    const isWriting = video.is_writing || false;
+                    const writingBadge = isWriting ? '<span style="background: #ed8936; color: white; padding: 2px 6px; border-radius: 3px; font-size: 10px; margin-left: 5px;">写入中</span>' : '';
+                    const safeFilename = JSON.stringify(video.filename || '');
+                    const downloadBtn = isWriting 
+                        ? '<span style="background: #cbd5e0; color: #718096; padding: 6px 12px; border-radius: 4px; display: inline-block; font-size: 12px; font-weight: 600; cursor: not-allowed;">⬇️ 下载 (写入中)</span>'
+                        : `<a href="/api/videos/${encodeURIComponent(video.filename)}" 
+                               style="background: #48bb78; color: white; padding: 6px 12px; border-radius: 4px; text-decoration: none; display: inline-block; font-size: 12px; font-weight: 600;" 
+                               download>⬇️ 下载</a>`;
+                    const deleteBtn = isWriting
+                        ? '<span style="background: #cbd5e0; color: #718096; padding: 6px 12px; border-radius: 4px; display: inline-block; font-size: 12px; font-weight: 600; cursor: not-allowed; margin-left: 5px;">🗑️ 删除 (写入中)</span>'
+                        : `<button onclick='deleteVideo(${safeFilename})' 
+                               style="background: #f56565; color: white; padding: 6px 12px; border: none; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer; margin-left: 5px;">🗑️ 删除</button>`;
+                    
+                    html += `<tr style="border-bottom: 1px solid #e2e8f0;">
+                        <td style="padding: 10px; font-size: 13px; color: #2d3748;">${video.filename}${writingBadge}</td>
+                        <td style="padding: 10px; font-size: 13px; color: #4a5568;">${video.size_mb} MB</td>
+                        <td style="padding: 10px; font-size: 13px; color: #4a5568;">${video.modified_time}</td>
+                        <td style="padding: 10px;">
+                            <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+                                ${downloadBtn}
+                                ${deleteBtn}
+                            </div>
+                        </td>
+                    </tr>`;
+                });
+                
+                html += '</tbody></table></div>';
+                container.innerHTML = html;
+            } catch (error) {
+                console.error('加载视频列表失败:', error);
+                videoDataLoaded = false;
+                container.innerHTML = 
+                    '<p style="color: #f44336; padding: 20px; text-align: center;">加载视频列表失败，请稍后重试</p>';
+            }
+        }
+
+        async function loadGPUInfo() {
+        const container = document.getElementById('gpu-info');
+        if (!gpuDataLoaded) {
+            container.innerHTML = '<p style="color: #64748b; padding: 12px; text-align: center;">正在加载 GPU 信息...</p>';
+        }
+            try {
+                const response = await fetchWithTimeout('/api/gpu-info', {}, 4000);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const data = await response.json();
+                
+                let html = '';
+                if (data.gpus && data.gpus.length > 0) {
+                    data.gpus.forEach(gpu => {
+                        const usage = gpu.memory_used_percent || 0;
+                        let progressClass = '';
+                        let cardClass = '';
+                        let badgeClass = '';
+                        if (usage > 80) {
+                            progressClass = 'danger';
+                            cardClass = 'danger';
+                            badgeClass = 'danger';
+                        } else if (usage > 60) {
+                            progressClass = 'warning';
+                            cardClass = 'warning';
+                            badgeClass = 'warning';
+                        }
+                        
+                        html += `
+                            <div class="gpu-card ${cardClass}">
+                                <div class="gpu-header">
+                                    <div class="gpu-name">💻 ${gpu.name || 'NPU'} #${gpu.id}</div>
+                                    <div class="gpu-usage-badge ${badgeClass}">${usage.toFixed(0)}%</div>
+                                </div>
+                                <div class="gpu-progress">
+                                    <div class="progress-bar">
+                                        <div class="progress-fill ${progressClass}" style="width: ${usage}%">${usage.toFixed(0)}%</div>
+                                    </div>
+                                </div>
+                                <div class="gpu-info">
+                                    <div class="gpu-info-item">
+                                        <div class="gpu-info-label">显存</div>
+                                        <div class="gpu-info-value">${gpu.memory_used || 'N/A'}</div>
+                                    </div>
+                                    <div class="gpu-info-item">
+                                        <div class="gpu-info-label">AICore</div>
+                                        <div class="gpu-info-value">${gpu.utilization || 'N/A'}%</div>
+                                    </div>
+                                    <div class="gpu-info-item">
+                                        <div class="gpu-info-label">温度</div>
+                                        <div class="gpu-info-value">${gpu.temperature || 'N/A'}</div>
+                                    </div>
+                                    <div class="gpu-info-item">
+                                        <div class="gpu-info-label">功率</div>
+                                        <div class="gpu-info-value">${gpu.power || 'N/A'}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                } else {
+                    html = '<div style="grid-column: 1/-1; text-align: center; padding: 20px; color: #718096;">无法获取设备信息（npu-smi / nvidia-smi 不可用）</div>';
+                }
+                
+                container.innerHTML = html;
+                gpuDataLoaded = true;
+            } catch (error) {
+                console.error('加载GPU信息失败:', error);
+                container.innerHTML = '<p style="color: #f44336; padding: 12px; text-align: center;">GPU 信息加载失败，请稍后重试</p>';
+                gpuDataLoaded = false;
+            }
+        }
+        
         // 页面加载时初始化
         window.onload = function() {
             // 初始化图表
@@ -887,6 +1321,7 @@ HTML_TEMPLATE = '''
             loadServiceStatus();
             loadLogs();
             loadHistoryData();
+            loadVideos();
             
             // 自动刷新
             setInterval(() => {
@@ -896,6 +1331,9 @@ HTML_TEMPLATE = '''
                     loadHistoryData();
                 }
             }, REFRESH_INTERVAL);
+            
+            // 每10秒刷新一次视频列表
+            setInterval(loadVideos, 10000);
         };
         
         // 加载历史数据
@@ -914,60 +1352,6 @@ HTML_TEMPLATE = '''
             }
         }
 
-        // 加载GPU信息
-        async function loadGPUInfo() {
-            try {
-                const response = await fetch('/api/gpu-info');
-                const data = await response.json();
-                
-                let html = '';
-                if (data.gpus && data.gpus.length > 0) {
-                    data.gpus.forEach(gpu => {
-                        const usage = gpu.memory_used_percent || 0;
-                        let progressClass = '';
-                        if (usage > 80) progressClass = 'danger';
-                        else if (usage > 60) progressClass = 'warning';
-                        
-                        html += `
-                            <div class="gpu-card">
-                                <div class="gpu-header">
-                                    <div class="gpu-name">${gpu.name || 'NPU'} #${gpu.id}</div>
-                                    <div class="gpu-id" style="background:${usage > 80 ? '#f56565' : usage > 60 ? '#ed8936' : '#48bb78'};">${usage.toFixed(0)}%</div>
-                                </div>
-                                <div class="progress-bar">
-                                    <div class="progress-fill ${progressClass}" style="width: ${usage}%"></div>
-                                </div>
-                                <div class="gpu-info">
-                                    <div class="info-item">
-                                        <span class="info-label">显存</span>
-                                        <span class="info-value">${gpu.memory_used}/${gpu.memory_total}</span>
-                                    </div>
-                                    <div class="info-item">
-                                        <span class="info-label">AICore</span>
-                                        <span class="info-value">${gpu.utilization || 'N/A'}%</span>
-                                    </div>
-                                    <div class="info-item">
-                                        <span class="info-label">温度</span>
-                                        <span class="info-value">${gpu.temperature || 'N/A'}°C</span>
-                                    </div>
-                                    <div class="info-item">
-                                        <span class="info-label">功率</span>
-                                        <span class="info-value">${gpu.power || 'N/A'}W</span>
-                                    </div>
-                                </div>
-                            </div>
-                        `;
-                    });
-                } else {
-                    html = '<p style="color: #718096;">无法获取设备信息（npu-smi / nvidia-smi 不可用）</p>';
-                }
-                
-                document.getElementById('gpu-info').innerHTML = html;
-            } catch (error) {
-                console.error('加载GPU信息失败:', error);
-            }
-        }
-
         // 渲染实例列表
         function renderInstances(serviceKey, instances) {
             const container = document.getElementById(`${serviceKey}-instances`);
@@ -982,7 +1366,7 @@ HTML_TEMPLATE = '''
                 const lastTotalTime = (ins.stats && ins.stats.last_total_time != null) ? ins.stats.last_total_time.toFixed(2) : '-';
                 const requestsPerSec = (ins.stats && ins.stats.requests_per_second != null) ? ins.stats.requests_per_second.toFixed(2) : '-';
                 const responsesPerSec = (ins.stats && ins.stats.responses_per_second != null) ? ins.stats.responses_per_second.toFixed(2) : '-';
-                const inferIp = ins.config.infer_ip || '127.0.0.1';
+                const inferIp = ins.config.infer_ip || '172.16.5.207';
                 const inferUrl = `http://${inferIp}:${ins.config.port}/infer`;
                 const serviceId = ins.config.service_id || `实例_${ins.pid}`;
                 return `
@@ -1088,8 +1472,8 @@ HTML_TEMPLATE = '''
             const devices = document.getElementById(`${serviceKey}-devices-input`).value;
             const port = document.getElementById(`${serviceKey}-port-input`).value;
             const batchSize = document.getElementById(`${serviceKey}-batch-input`).value;
-            const inferIp = document.getElementById(`${serviceKey}-infer-ip-input`) ? document.getElementById(`${serviceKey}-infer-ip-input`).value || '127.0.0.1' : '127.0.0.1';
-            const easydarwinUrl = document.getElementById(`${serviceKey}-easydarwin-input`).value || '127.0.0.1:5066';
+            const inferIp = document.getElementById(`${serviceKey}-infer-ip-input`) ? document.getElementById(`${serviceKey}-infer-ip-input`).value || '172.16.5.207' : '172.16.5.207';
+            const easydarwinUrl = document.getElementById(`${serviceKey}-easydarwin-input`).value || '172.16.5.207:5066';
             const servicePrefix = document.getElementById(`${serviceKey}-service-prefix-input`).value || (serviceKey === 'line_crossing' ? 'yolo11x_line_crossing' : 'yolo11x_head_detector');
             
             // 构建请求体
@@ -1110,11 +1494,15 @@ HTML_TEMPLATE = '''
                 const enableVideoSave = document.getElementById(`${serviceKey}-enable-video-save-input`).checked;
                 const videoSaveDir = document.getElementById(`${serviceKey}-video-save-dir-input`).value || './videos';
                 const videoFps = document.getElementById(`${serviceKey}-video-fps-input`).value || '25';
+                const videoSegmentDuration = document.getElementById(`${serviceKey}-video-segment-duration-input`).value || '60';
+                const videoSegmentMaxSize = document.getElementById(`${serviceKey}-video-segment-max-size-input`).value || '500';
                 requestBody.batch_timeout = parseFloat(batchTimeout);
                 requestBody.infer_ip = inferIp;  // 绊线算法也需要推理端点IP
                 requestBody.enable_video_save = enableVideoSave;
                 requestBody.video_save_dir = videoSaveDir;
                 requestBody.video_fps = parseInt(videoFps);
+                requestBody.video_segment_duration = parseInt(videoSegmentDuration);
+                requestBody.video_segment_max_size_mb = parseInt(videoSegmentMaxSize);
                 if (model) {
                     requestBody.model = model;
                 }
@@ -1230,6 +1618,49 @@ HTML_TEMPLATE = '''
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+        
+        // 删除视频
+        async function deleteVideo(filename) {
+            if (!confirm(`确定要删除视频 "${filename}" 吗？`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetchWithTimeout(`/api/videos/${encodeURIComponent(filename)}`, {
+                    method: 'DELETE'
+                }, 5000);
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert(`✅ ${data.message}`);
+                    loadVideos();
+                } else {
+                    alert(`❌ ${data.message}`);
+                }
+            } catch (error) {
+                alert('❌ 删除失败: ' + error);
+            }
+        }
+
+        async function deleteAllVideos() {
+            if (!confirm('确定要删除所有非写入中的视频吗？')) {
+                return;
+            }
+            try {
+                const response = await fetchWithTimeout('/api/videos/delete_all', {
+                    method: 'POST'
+                }, 5000);
+                const data = await response.json();
+                if (data.success) {
+                    alert(`✅ ${data.message}`);
+                    loadVideos();
+                } else {
+                    alert(`❌ ${data.message}`);
+                }
+            } catch (error) {
+                alert('❌ 删除全部失败: ' + error);
+            }
         }
     </script>
 </body>
@@ -1701,14 +2132,16 @@ def api_start_service():
     port = data.get('port', 0)
     batch_size = data.get('batch_size', 8)
     batch_timeout = data.get('batch_timeout', 0.1)  # 批处理超时
-    infer_ip = data.get('infer_ip', '127.0.0.1')  # 推理端点IP，默认为127.0.0.1
-    easydarwin_url = data.get('easydarwin_url', '127.0.0.1:5066')  # EasyDarwin地址，默认为127.0.0.1:5066
+    infer_ip = data.get('infer_ip', '172.16.5.207')  # 推理端点IP，默认为172.16.5.207
+    easydarwin_url = data.get('easydarwin_url', '172.16.5.207:5066')  # EasyDarwin地址，默认为172.16.5.207:5066
     service_id_prefix = data.get('service_id_prefix', 'yolo11x_head_detector')
     model_path = data.get('model', None)  # 模型路径（绊线算法需要）
     # 视频保存配置（绊线算法）
     enable_video_save = data.get('enable_video_save', False)  # 是否启用视频保存
     video_save_dir = data.get('video_save_dir', './videos')  # 视频保存目录
     video_fps = data.get('video_fps', 25)  # 视频帧率
+    video_segment_duration = data.get('video_segment_duration', 60)  # 视频分段时长（秒）
+    video_segment_max_size_mb = data.get('video_segment_max_size_mb', 500)  # 视频分段最大大小（MB）
     
     if service_key not in SERVICES:
         return jsonify({'success': False, 'message': '未知服务'})
@@ -1810,7 +2243,9 @@ def api_start_service():
                         cmd.extend([
                             '--enable-video-save',
                             '--video-save-dir', str(video_save_dir),
-                            '--video-fps', str(video_fps)
+                            '--video-fps', str(video_fps),
+                            '--video-segment-duration', str(video_segment_duration),
+                            '--video-segment-max-size-mb', str(video_segment_max_size_mb)
                         ])
                 else:
                     # 开发环境，使用Python运行脚本
@@ -1832,7 +2267,9 @@ def api_start_service():
                         cmd.extend([
                             '--enable-video-save',
                             '--video-save-dir', str(video_save_dir),
-                            '--video-fps', str(video_fps)
+                            '--video-fps', str(video_fps),
+                            '--video-segment-duration', str(video_segment_duration),
+                            '--video-segment-max-size-mb', str(video_segment_max_size_mb)
                         ])
             else:
                 # 实时检测服务使用NPU
@@ -1877,7 +2314,7 @@ def api_start_service():
                 log_handle.write(f"模型路径: {model_path}\n")
                 log_handle.write(f"推理端点IP: {infer_ip} (用于注册到EasyDarwin)\n")
                 if enable_video_save:
-                    log_handle.write(f"视频保存: 已启用 (目录: {video_save_dir}, 帧率: {video_fps})\n")
+                    log_handle.write(f"视频保存: 已启用 (目录: {video_save_dir}, 帧率: {video_fps}, 分段时长: {video_segment_duration}秒, 最大大小: {video_segment_max_size_mb}MB)\n")
                 else:
                     log_handle.write(f"视频保存: 未启用\n")
             else:
@@ -1914,6 +2351,8 @@ def api_start_service():
                     if enable_video_save:
                         instance_config['video_save_dir'] = video_save_dir
                         instance_config['video_fps'] = video_fps
+                        instance_config['video_segment_duration'] = video_segment_duration
+                        instance_config['video_segment_max_size_mb'] = video_segment_max_size_mb
                 
                 instance = {
                     'process': process,
@@ -2136,6 +2575,219 @@ def api_history_data():
         return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)})
+
+
+def resolve_video_directory_and_writing_videos():
+    """解析视频目录并获取正在写入的视频列表"""
+    video_dir = None
+    writing_videos = set()
+    
+    line_crossing_service = SERVICES.get('line_crossing', {})
+    instances = line_crossing_service.get('instances', [])
+    
+    for instance in instances:
+        config = instance.get('config', {})
+        if config.get('enable_video_save'):
+            video_save_dir = config.get('video_save_dir', './videos')
+            if os.path.isabs(video_save_dir):
+                video_dir = Path(video_save_dir)
+            else:
+                video_dir = (BASE_DIR / video_save_dir).resolve()
+            try:
+                port = config.get('port')
+                if port:
+                    import urllib.request
+                    with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/writing-videos', timeout=0.5) as resp:
+                        data = json.loads(resp.read().decode('utf-8'))
+                        if isinstance(data, dict) and 'videos' in data:
+                            writing_videos = set(data['videos'])
+            except Exception as e:
+                print(f"获取正在写入的视频列表失败: {e}")
+            break
+    
+    if video_dir is None:
+        video_dir = (BASE_DIR / 'videos').resolve()
+    return video_dir, writing_videos
+
+
+@app.route('/api/videos')
+def api_videos():
+    """获取视频列表API"""
+    try:
+        video_dir, writing_videos = resolve_video_directory_and_writing_videos()
+        
+        # 检查目录是否存在
+        if not video_dir.exists():
+            return jsonify({'videos': []})
+        
+        # 获取所有视频文件
+        video_files = []
+        current_time = time.time()
+        for video_file in sorted(video_dir.glob('*.mp4'), key=lambda x: x.stat().st_mtime, reverse=True):
+            try:
+                stat = video_file.stat()
+                size_mb = stat.st_size / (1024 * 1024)
+                mtime = datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                
+                # 检查是否正在写入（在writing_videos中，或者最后修改时间很近）
+                is_writing = False
+                video_path_str = str(video_file.resolve())
+                if video_path_str in writing_videos:
+                    is_writing = True
+                else:
+                    # 如果最后修改时间在30秒内，认为可能正在写入
+                    time_since_modify = current_time - stat.st_mtime
+                    if time_since_modify < 30:
+                        is_writing = True
+                
+                video_files.append({
+                    'filename': video_file.name,
+                    'size_mb': round(size_mb, 2),
+                    'modified_time': mtime,
+                    'is_writing': is_writing
+                })
+            except Exception as e:
+                print(f"处理视频文件 {video_file} 时出错: {e}")
+                continue
+        
+        return jsonify({'videos': video_files})
+    except Exception as e:
+        return jsonify({'error': str(e)})
+
+
+@app.route('/api/videos/<path:filename>')
+def api_video_download(filename):
+    """视频下载API"""
+    from flask import send_file, abort
+    from urllib.parse import unquote
+    
+    try:
+        # URL解码文件名
+        filename = unquote(filename)
+        
+        # 安全检查：防止路径遍历攻击
+        if '..' in filename or '/' in filename or '\\' in filename:
+            abort(400)
+        
+        video_dir, _ = resolve_video_directory_and_writing_videos()
+        
+        # 确保目录存在
+        if not video_dir.exists():
+            abort(404, "Video directory not found")
+        
+        video_path = video_dir / filename
+        
+        # 检查文件是否存在
+        if not video_path.exists() or not video_path.is_file():
+            abort(404, "Video not found")
+        
+        # 检查文件扩展名
+        if not filename.lower().endswith('.mp4'):
+            abort(400)
+        
+        # 检查是否正在写入（最后修改时间在30秒内）
+        try:
+            stat = video_path.stat()
+            current_time = time.time()
+            time_since_modify = current_time - stat.st_mtime
+            if time_since_modify < 30:
+                abort(409, "视频正在写入中，无法下载")  # 409 Conflict
+        except:
+            pass
+        
+        return send_file(
+            str(video_path),
+            mimetype='video/mp4',
+            as_attachment=True,
+            download_name=filename
+        )
+    except Exception as e:
+        if hasattr(e, 'code'):
+            raise
+        print(f"视频下载错误: {str(e)}")
+        abort(500)
+
+
+@app.route('/api/videos/<path:filename>', methods=['DELETE'])
+def api_video_delete(filename):
+    """删除视频API"""
+    try:
+        # URL解码文件名
+        from urllib.parse import unquote
+        filename = unquote(filename)
+        
+        # 安全检查：防止路径遍历攻击
+        if '..' in filename or '/' in filename or '\\' in filename:
+            return jsonify({'success': False, 'message': '无效的文件名'}), 400
+        
+        video_dir, writing_videos = resolve_video_directory_and_writing_videos()
+        
+        # 确保目录存在
+        if not video_dir.exists():
+            return jsonify({'success': False, 'message': f'视频目录不存在: {video_dir}'}), 404
+        
+        video_path = video_dir / filename
+        
+        # 调试信息
+        print(f"[DEBUG] 删除视频: filename={filename}, video_dir={video_dir}, video_path={video_path}, exists={video_path.exists()}")
+        
+        # 检查文件是否存在
+        if not video_path.exists() or not video_path.is_file():
+            # 尝试列出目录中的所有文件，用于调试
+            try:
+                existing_files = [f.name for f in video_dir.glob('*.mp4')]
+                print(f"[DEBUG] 目录中的视频文件: {existing_files}")
+            except:
+                pass
+            return jsonify({'success': False, 'message': f'文件不存在: {filename} (目录: {video_dir})'}), 404
+        
+        # 检查文件扩展名
+        if not filename.lower().endswith('.mp4'):
+            return jsonify({'success': False, 'message': '无效的文件类型'}), 400
+        
+        # 检查是否正在写入
+        video_path_str = str(video_path.resolve())
+        if video_path_str in writing_videos:
+            return jsonify({'success': False, 'message': '视频正在写入中，无法删除'}), 409
+        
+        # 删除文件
+        try:
+            video_path.unlink()
+            return jsonify({'success': True, 'message': f'已删除视频: {filename}'})
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'删除失败: {str(e)}'}), 500
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/videos/delete_all', methods=['POST'])
+def api_video_delete_all():
+    """删除所有非写入中的视频"""
+    try:
+        video_dir, writing_videos = resolve_video_directory_and_writing_videos()
+        if not video_dir.exists():
+            return jsonify({'success': True, 'message': '没有视频文件可删除'})
+        
+        deleted = 0
+        skipped = 0
+        for video_file in video_dir.glob('*.mp4'):
+            try:
+                video_path_str = str(video_file.resolve())
+                if video_path_str in writing_videos:
+                    skipped += 1
+                    continue
+                video_file.unlink()
+                deleted += 1
+            except Exception as e:
+                print(f"删除视频 {video_file} 失败: {e}")
+                skipped += 1
+        
+        message = f'已删除 {deleted} 个视频'
+        if skipped > 0:
+            message += f'，跳过 {skipped} 个正在写入或无法删除的视频'
+        return jsonify({'success': True, 'message': message})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 
 def cleanup_on_exit():
