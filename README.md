@@ -45,7 +45,7 @@ easyAIEngine 是一套基于 YOLOv11 的人群分析解决方案，包含实时�
 
 ### ARM Docker 部署
 
-ARM + Ascend 环境请使用 Harbor 镜像 `harbor.chencytech.com/chency-ai/easyaiengine:v1-arm64`，完整的容器启动命令见 [docs/ARM_DOCKER_DEPLOYMENT.md](docs/ARM_DOCKER_DEPLOYMENT.md)。
+ARM + Ascend 环境请使用 Harbor 镜像 `harbor.chencytech.com/chency-ai/easyaiengine:v2-arm64`，完整的容器启动命令见 [docs/ARM_DOCKER_DEPLOYMENT.md](docs/ARM_DOCKER_DEPLOYMENT.md)。
 
 ## 日志与配置
 
