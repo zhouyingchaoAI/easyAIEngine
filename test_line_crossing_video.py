@@ -580,7 +580,7 @@ def main():
                         help='输出视频路径 (mp4)')
     parser.add_argument('--model', '-m', default='./weight/best.om',
                         help='模型路径 (默认: ./weight/best.om)')
-    parser.add_argument('--device-id', type=int, default=3,
+    parser.add_argument('--device-id', type=int, default=0,
                         help='Ascend NPU设备ID (默认: 0)')
     parser.add_argument('--confidence', type=float, default=0.05,
                         help='置信度阈值 (默认: 0.5)')

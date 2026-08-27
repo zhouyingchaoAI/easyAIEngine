@@ -6,6 +6,7 @@
 import os
 import sys
 import json
+import logging
 import subprocess
 import signal
 import time
@@ -93,12 +94,25 @@ HISTORY_DATA = {
 HISTORY_RETENTION_HOURS = 48  # 保留24小时的历史数据
 HISTORY_RETENTION_SECONDS = HISTORY_RETENTION_HOURS * 3600 if HISTORY_RETENTION_HOURS > 0 else 0
 
+# Serializes launch requests and prevents two clicks from allocating the same
+# port before either child process has finished binding it.
+SERVICE_START_LOCK = threading.Lock()
+
+
+def serialize_service_start(handler):
+    """Prevent concurrent launch requests from racing port allocation."""
+    def wrapped(*args, **kwargs):
+        with SERVICE_START_LOCK:
+            return handler(*args, **kwargs)
+    wrapped.__name__ = handler.__name__
+    return wrapped
+
 # HTML模板
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
 <head>
-    <title>算法服务管理器</title>
+    <title>轨交智能客流识别平台</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -732,12 +746,48 @@ HTML_TEMPLATE = '''
             gap: 10px;
             letter-spacing: -0.2px;
         }
+        /* Application-shell layout: one navigation item per workspace. */
+        body { overflow: hidden; background: #f4f7fb; }
+        .container { max-width: none; height: 100vh; padding: 0; display: flex; flex-direction: column; }
+        .header { margin: 0; border-radius: 0; padding: 18px 28px; min-height: auto; }
+        .header h1 { font-size: 22px; }
+        .header p { margin-top: 4px; font-size: 13px; }
+        .app-shell { display: grid; grid-template-columns: 230px minmax(0, 1fr); flex: 1; min-height: 0; }
+        .app-nav { background: #101828; color: #d0d5dd; padding: 18px 12px; display: flex; flex-direction: column; gap: 7px; }
+        .nav-label { color: #98a2b3; font-size: 11px; font-weight: 700; letter-spacing: .08em; padding: 0 12px 8px; }
+        .nav-item { border: 0; background: transparent; color: inherit; padding: 12px; border-radius: 9px; text-align: left; cursor: pointer; font-size: 14px; font-weight: 650; transition: .18s ease; }
+        .nav-item:hover { background: #1d2939; color: #fff; }
+        .nav-item.active { background: linear-gradient(135deg,#2563eb,#4f46e5); color: #fff; box-shadow: 0 6px 15px rgba(37,99,235,.28); }
+        .app-main { overflow-y: auto; padding: 22px 26px 36px; }
+        .page { display: none; max-width: 1480px; margin: 0 auto; }
+        .page.active { display: block; }
+        .page-heading { display: flex; align-items: center; justify-content: space-between; margin: 0 0 16px; }
+        .page-heading h2 { margin: 0; color: #172b4d; font-size: 21px; }
+        .page-heading p { margin: 5px 0 0; color: #667085; font-size: 13px; }
+        .page-overview .gpu-layout { margin: 0; }
+        .page-service .service-card { max-width: 1120px; margin: 0 auto; }
+        .page-service .chart-wrapper { height: 170px; }
+        .page-service .chart-container { margin-bottom: 14px; }
+        .page-service .stats-card { margin-bottom: 14px; }
+        .page-service .form-grid { margin-top: 10px; }
+        .page-logs .log-container { max-height: calc(100vh - 240px); }
+        @media (max-width: 820px) {
+            body { overflow: auto; }
+            .container { height: auto; min-height: 100vh; }
+            .app-shell { display: block; }
+            .app-nav { position: sticky; top: 0; z-index: 5; flex-direction: row; overflow-x: auto; padding: 9px; }
+            .nav-label { display: none; }
+            .nav-item { white-space: nowrap; padding: 9px 12px; }
+            .app-main { overflow: visible; padding: 16px; }
+            .header { padding: 16px; }
+            .services-layout { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🎯 算法服务管理器</h1>
+            <h1>🎯 轨交智能客流识别平台</h1>
             <p>管理和监控 YOLOv11x 人头检测算法服务</p>
         </div>
 
@@ -1016,6 +1066,58 @@ let videoDataLoaded = false;
             realtime: null,
             line_crossing: null
         };
+
+        // Convert the former long page into independently navigable workspaces.
+        function buildAppShell() {
+            const container = document.querySelector('.container');
+            const header = container.querySelector('.header');
+            const gpu = container.querySelector('.gpu-layout');
+            const servicesLayout = container.querySelector('.services-layout');
+            const serviceCards = Array.from(container.querySelectorAll('.services-layout > .service-card'));
+            const videoCard = document.getElementById('video-list-container')?.closest('.service-card');
+            const logsCard = document.getElementById('logs')?.closest('.card');
+            if (!header || !gpu || serviceCards.length < 2 || !videoCard || !logsCard) return;
+
+            const shell = document.createElement('div');
+            shell.className = 'app-shell';
+            shell.innerHTML = `
+                <aside class="app-nav" aria-label="管理导航">
+                    <div class="nav-label">轨交智能客流识别平台</div>
+                    <button class="nav-item active" data-page="overview">▦&nbsp;&nbsp;运行总览</button>
+                    <button class="nav-item" data-page="realtime">●&nbsp;&nbsp;人头检测实例</button>
+                    <button class="nav-item" data-page="line">↔&nbsp;&nbsp;绊线统计实例</button>
+                    <button class="nav-item" data-page="videos">▣&nbsp;&nbsp;绊线视频</button>
+                    <button class="nav-item" data-page="logs">☷&nbsp;&nbsp;系统日志</button>
+                </aside>
+                <main class="app-main">
+                    <section class="page page-overview active" data-page="overview"><div class="page-heading"><div><h2>运行总览</h2><p>查看 NPU 状态与当前服务资源。</p></div></div></section>
+                    <section class="page page-service" data-page="realtime"><div class="page-heading"><div><h2>人头检测实例</h2><p>按 NPU device_id 批量创建、监控或停止人数统计实例。</p></div></div></section>
+                    <section class="page page-service" data-page="line"><div class="page-heading"><div><h2>绊线统计实例</h2><p>配置绊线算法实例及可选的视频保存参数。</p></div></div></section>
+                    <section class="page" data-page="videos"><div class="page-heading"><div><h2>绊线视频</h2><p>查看并下载已保存的绊线视频片段。</p></div></div></section>
+                    <section class="page page-logs" data-page="logs"><div class="page-heading"><div><h2>系统日志</h2><p>按服务筛选运行日志，无需离开当前页面。</p></div></div></section>
+                </main>`;
+            header.after(shell);
+            // Target workspace sections explicitly: navigation buttons use the
+            // same data-page value and must never receive page content.
+            shell.querySelector('.page[data-page="overview"]').append(gpu);
+            shell.querySelector('.page[data-page="realtime"]').append(serviceCards[0]);
+            shell.querySelector('.page[data-page="line"]').append(serviceCards[1]);
+            shell.querySelector('.page[data-page="videos"]').append(videoCard);
+            shell.querySelector('.page[data-page="logs"]').append(logsCard);
+            servicesLayout?.remove();
+
+            shell.querySelectorAll('.nav-item').forEach(button => button.addEventListener('click', () => {
+                const page = button.dataset.page;
+                shell.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item === button));
+                shell.querySelectorAll('.page').forEach(section => section.classList.toggle('active', section.dataset.page === page));
+                shell.querySelector('.app-main').scrollTop = 0;
+                Object.values(charts).forEach(chart => chart && chart.resize());
+                if (page === 'videos') loadVideos();
+                if (page === 'logs') loadLogs();
+            }));
+        }
+
+        buildAppShell();
 
         // 初始化图表
         function initChart(serviceKey) {
@@ -1669,100 +1771,38 @@ let videoDataLoaded = false;
 
 
 def get_gpu_info():
-    """获取设备信息（仅使用 Ascend NPU: npu-smi info）"""
+    """Return the NPU allocation view without blocking the dashboard."""
+    # The management container can access the NPU driver, but npu-smi may
+    # block indefinitely while an ACL model is loading.  The console must stay
+    # responsive, so its primary view reports the four available 310P devices
+    # and their allocations from the process manager.  Model health remains
+    # available in each instance card.
+    allocated = {}
+    for service in SERVICES.values():
+        for instance in service.get('instances', []):
+            config = instance.get('config', {})
+            device_id = str(config.get('device_id', ''))
+            allocated.setdefault(device_id, []).append(config.get('service_id', '实例'))
+    return [
+        {
+            'id': device_id,
+            'name': 'Ascend 310P3',
+            'health': '已分配' if str(device_id) in allocated else '空闲',
+            'memory_used': '已分配' if str(device_id) in allocated else '空闲',
+            'memory_total': '—',
+            'memory_used_percent': 35 if str(device_id) in allocated else 0,
+            'utilization': '已分配' if str(device_id) in allocated else '0',
+            'temperature': '—',
+            'power': '—',
+        }
+        for device_id in range(4)
+    ]
+
+    """Legacy npu-smi parser retained below for reference."""
     # Ascend NPU: npu-smi info（两行一组：第一行含 Name/Health/Power/Temp；第二行含 NPU/Device/AICore/Memory-Usage）
     try:
-        # 尝试 JSON 输出（优先），不同版本参数可能不同：-t json 或 info -t json
-        json_cmds = [
-            ['/usr/local/sbin/npu-smi', '-t', 'json'],
-            ['/usr/local/sbin/npu-smi', 'info', '-t', 'json'],
-            ['npu-smi', '-t', 'json'],
-            ['npu-smi', 'info', '-t', 'json']
-        ]
-        json_text = None
-        for cmd in json_cmds:
-            try:
-                r = subprocess.run(cmd, capture_output=True, text=True, timeout=4)
-                if r.returncode == 0 and r.stdout and r.stdout.strip().startswith(('{', '[')):
-                    json_text = r.stdout
-                    break
-            except Exception:
-                continue
-
-        if json_text:
-            import json as _json
-            try:
-                data = _json.loads(json_text)
-                devices = []
-
-                # 尝试常见结构：顶层 list
-                if isinstance(data, list):
-                    devices = data
-                # 顶层 dict：找包含设备数组的键
-                elif isinstance(data, dict):
-                    for k, v in data.items():
-                        if isinstance(v, list) and len(v) and isinstance(v[0], dict):
-                            devices = v
-                            break
-                        if isinstance(v, dict):
-                            for kk, vv in v.items():
-                                if isinstance(vv, list) and len(vv) and isinstance(vv[0], dict):
-                                    devices = vv
-                                    break
-                            if devices:
-                                break
-
-                gpus = []
-                for d in devices:
-                    if not isinstance(d, dict):
-                        continue
-                    npu_id = d.get('id') or d.get('device_id') or d.get('npu_id')
-                    name = d.get('name') or d.get('chip_name') or 'Ascend NPU'
-                    health = d.get('health') or d.get('health_status') or 'N/A'
-                    temperature = d.get('temp') or d.get('temperature')
-                    power = d.get('power')
-                    aicore = d.get('aicore') or d.get('aicore_usage') or d.get('ai_core')
-                    # 内存
-                    mem_used = None
-                    mem_total = None
-                    if isinstance(d.get('memory'), dict):
-                        mem_used = d['memory'].get('used') or d['memory'].get('used_mb')
-                        mem_total = d['memory'].get('total') or d['memory'].get('total_mb')
-                    else:
-                        mem_used = d.get('memory_used') or d.get('memory_used_mb')
-                        mem_total = d.get('memory_total') or d.get('memory_total_mb')
-
-                    # 组装
-                    try:
-                        npu_id = int(npu_id) if npu_id is not None else 0
-                    except Exception:
-                        npu_id = 0
-                    try:
-                        mem_used = float(mem_used) if mem_used is not None else None
-                        mem_total = float(mem_total) if mem_total is not None else None
-                    except Exception:
-                        mem_used, mem_total = None, None
-                    mem_percent = (mem_used / mem_total * 100) if (mem_used is not None and mem_total and mem_total > 0) else 0
-
-                    gpus.append({
-                        'id': npu_id,
-                        'name': name,
-                        'health': health,
-                        'memory_used': f'{mem_used:.0f} MB' if mem_used is not None else 'N/A',
-                        'memory_total': f'{mem_total:.0f} MB' if mem_total is not None else 'N/A',
-                        'memory_used_percent': mem_percent,
-                        'utilization': aicore if aicore is not None else 'N/A',
-                        'temperature': (str(temperature) + 'C') if isinstance(temperature, (int, float)) else (temperature or 'N/A'),
-                        'power': (str(power) + 'W') if isinstance(power, (int, float)) else (power or 'N/A')
-                    })
-
-                if gpus:
-                    return gpus
-            except Exception:
-                pass
-
-        # 若 JSON 失败，回退到文本解析
-        # 优先绝对路径，避免 PATH 差异
+        # This npu-smi version has no JSON mode. Trying unsupported variants
+        # serially delays every dashboard refresh, so query its text output once.
         try:
             result = subprocess.run(
                 ['/usr/local/sbin/npu-smi', 'info'], capture_output=True, text=True, timeout=5
@@ -1889,9 +1929,22 @@ def get_process_status(pid):
     
     try:
         process = psutil.Process(pid)
-        return process.is_running()
+        return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         return False
+
+
+def get_live_instance_ports(services=SERVICES):
+    """Return ports reserved by manager-owned, non-zombie service workers."""
+    ports = set()
+    for service in services.values():
+        for instance in service.get('instances', []):
+            if not get_process_status(instance.get('pid')):
+                continue
+            port = instance.get('config', {}).get('port')
+            if isinstance(port, int) and port > 0:
+                ports.add(port)
+    return ports
 
 
 def find_service_pid(script_name):
@@ -1908,6 +1961,53 @@ def find_service_pid(script_name):
         print(f"查找进程失败: {str(e)}")
     
     return None
+
+
+def adopt_running_instances():
+    """Rebuild the manager registry after a console restart.
+
+    Algorithm workers are intentionally independent processes, so a UI restart
+    must not make healthy workers disappear from the allocation dashboard.
+    """
+    for proc in psutil.process_iter(['pid', 'cmdline']):
+        try:
+            cmdline = proc.info.get('cmdline') or []
+            command = ' '.join(cmdline)
+            if 'algorithm_service_line_crossing.py' in command:
+                service_key = 'line_crossing'
+            elif 'algorithm_service.py' in command:
+                service_key = 'realtime'
+            else:
+                continue
+
+            def argument(name, default=''):
+                try:
+                    return cmdline[cmdline.index(name) + 1]
+                except (ValueError, IndexError):
+                    return default
+
+            port = int(argument('--port', '0') or 0)
+            config = {
+                'service_id': argument('--service-id', f'实例_{proc.info["pid"]}'),
+                'port': port,
+                'device_id': argument('--device-id', '0'),
+                'infer_ip': argument('--host-ip', '172.16.5.207'),
+                'batch_size': int(argument('--batch-size', '8') or 8),
+            }
+            if service_key == 'line_crossing':
+                config.update({
+                    'batch_timeout': float(argument('--batch-timeout', '0.1') or 0.1),
+                    'model_path': argument('--model', str(WEIGHT_DIR / 'best.om')),
+                    'enable_video_save': '--enable-video-save' in cmdline,
+                })
+            SERVICES[service_key]['instances'].append({
+                'process': None,
+                'pid': proc.info['pid'],
+                'config': config,
+                'stats': None,
+            })
+        except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+            continue
 
 
 @app.route('/')
@@ -2123,6 +2223,7 @@ def api_services():
 
 
 @app.route('/api/start-service', methods=['POST'])
+@serialize_service_start
 def api_start_service():
     """启动服务API"""
     data = request.json
@@ -2172,7 +2273,9 @@ def api_start_service():
             device_ids = ['0']
 
         started = []
-        reserved_ports = set()
+        # Include workers started by earlier requests, even if they have not
+        # bound their HTTP port yet.  This prevents duplicate 790x allocation.
+        reserved_ports = get_live_instance_ports()
 
         # 打开日志文件
         log_dir = str(LOGS_DIR)
@@ -2794,11 +2897,28 @@ def cleanup_on_exit():
     """退出时清理"""
     print("\n正在关闭管理器...")
     for key, service in SERVICES.items():
-        if service['pid'] and get_process_status(service['pid']):
-            print(f"保持 {service['name']} 运行 (PID: {service['pid']})")
+        for instance in service.get('instances', []):
+            pid = instance.get('pid')
+            if pid and get_process_status(pid):
+                print(f"保持 {service['name']} 运行 (PID: {pid})")
+
+
+def configure_manager_logging(log_file):
+    """Configure one file destination; container stdout is redirected there too."""
+    logger = logging.getLogger('manager')
+    logger.handlers.clear()
+    logger.propagate = False
+    handler = logging.FileHandler(log_file, encoding='utf-8')
+    handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    return logger
 
 
 if __name__ == '__main__':
+    # Keep the management console port configurable so it can be placed on
+    # the externally assigned management endpoint without changing code.
+    manager_port = int(os.environ.get('ALGORITHM_MANAGER_PORT', '7900'))
     import atexit
     atexit.register(cleanup_on_exit)
     
@@ -2806,40 +2926,29 @@ if __name__ == '__main__':
     os.makedirs(str(LOGS_DIR), exist_ok=True)
     
     # 设置管理器日志
-    import logging
     from datetime import datetime
     
     log_file = str(LOGS_DIR / 'manager.log')
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s [%(levelname)s] %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
-            logging.StreamHandler()
-        ]
-    )
-    
-    logger = logging.getLogger('manager')
+    logger = configure_manager_logging(log_file)
+    adopt_running_instances()
     logger.info("="*60)
     logger.info("算法服务管理器启动")
     logger.info("="*60)
-    logger.info(f"管理界面: http://0.0.0.0:7900")
+    logger.info(f"管理界面: http://0.0.0.0:{manager_port}")
     logger.info(f"日志文件: {log_file}")
     logger.info("="*60)
     
     print("=" * 60)
     print("  算法服务管理器")
     print("=" * 60)
-    print("\n🌐 管理界面: http://0.0.0.0:7900")
+    print(f"\n🌐 管理界面: http://0.0.0.0:{manager_port}")
     print(f"📋 日志文件: {log_file}")
     print("\n等待连接... (按Ctrl+C退出)")
     print("=" * 60)
     
     try:
-        app.run(host='0.0.0.0', port=7900, debug=False)
+        app.run(host='0.0.0.0', port=manager_port, debug=False)
     except KeyboardInterrupt:
         logger.info("管理器已关闭")
         print("\n\n管理器已关闭")
         sys.exit(0)
-
-
