@@ -43,6 +43,10 @@ easyAIEngine 是一套基于 YOLOv11 的人群分析解决方案，包含实时�
 
 更多 API 调用说明参考 `docs/服务说明.md` 与 `docs/告警机制说明.md`。
 
+### ARM Docker 部署
+
+ARM + Ascend 环境请使用 Harbor 镜像 `harbor.chencytech.com/chency-ai/easyaiengine:v1-arm64`，完整的容器启动命令见 [docs/ARM_DOCKER_DEPLOYMENT.md](docs/ARM_DOCKER_DEPLOYMENT.md)。
+
 ## 日志与配置
 
 - 默认日志目录为 `logs/`，已通过 `.gitkeep` 保留结构但不再追踪历史日志。
@@ -68,6 +72,7 @@ python tests/test_region_filter.py
 - `GPU配置说明.md`：多 GPU/Ascend 环境配置
 - `绊线告警机制详解.md`：绊线统计内部流程
 - `日志管理说明.md`：日志巡检、清理与诊断
+- `ARM_DOCKER_DEPLOYMENT.md`：使用 Harbor ARM 镜像启动算法管理服务
 
 更多内容请查阅 `docs/README` 或根据文件名快速定位。
 

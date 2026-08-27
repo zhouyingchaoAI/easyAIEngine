@@ -5,10 +5,10 @@
 ## 1. 前置条件
 
 - ARM 主机已安装 Docker 和 Ascend 驱动；驱动目录为 `/usr/local/Ascend/driver`。
-- 已获取包含 Python、CANN/ACL 运行时与项目依赖的 ARM 镜像，例如 `easyaiengine:v1`。
+- 已获取 Harbor 中包含 Python、CANN/ACL 运行时与项目依赖的 ARM 镜像：`harbor.chencytech.com/chency-ai/easyaiengine:v1-arm64`。
 - 将本仓库克隆到主机目录，例如 `/opt/rail-passenger-flow/code`。
 
-> 镜像与 Ascend 驱动版本必须兼容。部署前可执行 `docker run --rm --privileged -v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro easyaiengine:v1 npu-smi info` 进行确认。
+> 镜像与 Ascend 驱动版本必须兼容。部署前可执行 `docker run --rm --privileged -v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro harbor.chencytech.com/chency-ai/easyaiengine:v1-arm64 npu-smi info` 进行确认。
 
 ## 2. 启动算法容器
 
@@ -16,7 +16,7 @@
 
 ```bash
 export PROJECT_ROOT=/opt/rail-passenger-flow/code
-export ALGORITHM_IMAGE=easyaiengine:v1
+export ALGORITHM_IMAGE=harbor.chencytech.com/chency-ai/easyaiengine:v1-arm64
 
 docker run -d \
   --name head_detect_new \
